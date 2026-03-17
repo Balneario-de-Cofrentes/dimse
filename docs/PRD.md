@@ -37,7 +37,7 @@ Existing projects:
 
 | Project | Status | Limitations |
 |---------|--------|-------------|
-| [wolfpacs](https://github.com/wolfpacs/wolfpacs) | Abandoned (~2020) | Partial PDU support, no SCP behaviour, no telemetry, monolithic |
+| [wolfpacs](https://github.com/wolfpacs/wolfpacs) | Low activity | Partial PDU support, no SCP behaviour, no telemetry, monolithic |
 | [dicom.ex](https://github.com/jjedele/dicom.ex) | Abandoned (~2021) | C-ECHO only, no state machine, no fragmentation |
 
 Teams building DICOM applications on Elixir (PACS, RIS, AI inference gateways)
@@ -666,4 +666,4 @@ DCMTK `storescu` and store them via the handler callback.
 - [dicom library](https://hex.pm/packages/dicom) — DICOM P10 parser
 - [DCMTK](https://dcmtk.org/) — Reference DIMSE implementation (C++)
 - [dcm4che](https://www.dcm4che.org/) — Reference DIMSE implementation (Java)
-- [wolfpacs](https://github.com/wolfpacs/wolfpacs) — Existing Elixir DIMSE (abandoned)
+- [wolfpacs](https://github.com/wolfpacs/wolfpacs) — Existing Elixir DIMSE (low activity)

@@ -25,14 +25,28 @@ defmodule Dimse.Scp.Echo do
        │            (status 0x0000) │
   """
 
-  @doc """
-  Handles a C-ECHO-RQ command.
+  @behaviour Dimse.Handler
 
-  Always returns `{:ok, 0x0000}` (Success) per PS3.7 Section 9.1.5.4.
+  @verification_uid "1.2.840.10008.1.1"
+
+  @doc """
+  Returns the supported abstract syntaxes (Verification SOP Class only).
   """
-  @spec handle(command :: map(), state :: Dimse.Association.State.t()) ::
-          {:ok, integer()}
-  def handle(_command, _state) do
-    {:ok, 0x0000}
-  end
+  @impl Dimse.Handler
+  def supported_abstract_syntaxes, do: [@verification_uid]
+
+  @impl Dimse.Handler
+  def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+  @impl Dimse.Handler
+  def handle_store(_command, _data, _state), do: {:error, 0xC000, "not supported"}
+
+  @impl Dimse.Handler
+  def handle_find(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+  @impl Dimse.Handler
+  def handle_move(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+  @impl Dimse.Handler
+  def handle_get(_command, _query, _state), do: {:error, 0xC000, "not supported"}
 end

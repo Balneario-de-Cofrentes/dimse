@@ -5,15 +5,146 @@ defmodule Dimse.CommandTest do
   alias Dimse.Command.Fields
   alias Dimse.Command.Status
 
-  describe "Command.encode/1" do
-    test "returns {:error, :not_implemented}" do
-      assert {:error, :not_implemented} = Command.encode(%{})
+  describe "encode/1" do
+    test "encodes empty command set with only group length" do
+      assert {:ok, binary} = Command.encode(%{})
+      # Should contain just CommandGroupLength (0000,0000) with value 0
+      assert <<0x00, 0x00, 0x00, 0x00, 4::32-little, 0::32-little>> = binary
+    end
+
+    test "encodes a C-ECHO-RQ command set" do
+      cmd = %{
+        {0x0000, 0x0002} => "1.2.840.10008.1.1",
+        {0x0000, 0x0100} => 0x0030,
+        {0x0000, 0x0110} => 1,
+        {0x0000, 0x0800} => 0x0101
+      }
+
+      assert {:ok, binary} = Command.encode(cmd)
+      assert is_binary(binary)
+      # Must decode back correctly
+      assert {:ok, decoded} = Command.decode(binary)
+      assert decoded[{0x0000, 0x0002}] == "1.2.840.10008.1.1"
+      assert decoded[{0x0000, 0x0100}] == 0x0030
+      assert decoded[{0x0000, 0x0110}] == 1
+      assert decoded[{0x0000, 0x0800}] == 0x0101
+    end
+
+    test "auto-computes CommandGroupLength" do
+      cmd = %{
+        {0x0000, 0x0100} => 0x0030,
+        {0x0000, 0x0110} => 1
+      }
+
+      assert {:ok, binary} = Command.encode(cmd)
+      assert {:ok, decoded} = Command.decode(binary)
+      # Group length should be present
+      assert is_integer(decoded[{0x0000, 0x0000}])
+    end
+
+    test "strips existing CommandGroupLength from input" do
+      cmd = %{
+        {0x0000, 0x0000} => 9999,
+        {0x0000, 0x0100} => 0x0030
+      }
+
+      assert {:ok, binary} = Command.encode(cmd)
+      assert {:ok, decoded} = Command.decode(binary)
+      # Should NOT be 9999 — it's recomputed
+      assert decoded[{0x0000, 0x0000}] != 9999
+    end
+
+    test "pads UID values to even length" do
+      # "1.2.3" is 5 bytes (odd), should be padded with 0x00
+      cmd = %{{0x0000, 0x0002} => "1.2.3"}
+      assert {:ok, binary} = Command.encode(cmd)
+      assert {:ok, decoded} = Command.decode(binary)
+      assert decoded[{0x0000, 0x0002}] == "1.2.3"
+    end
+
+    test "encodes US values as 16-bit little-endian" do
+      cmd = %{{0x0000, 0x0100} => 0x0030}
+      assert {:ok, binary} = Command.encode(cmd)
+      assert {:ok, decoded} = Command.decode(binary)
+      assert decoded[{0x0000, 0x0100}] == 0x0030
+    end
+
+    test "encodes UL values as 32-bit little-endian" do
+      cmd = %{{0x0000, 0x0000} => 100}
+      assert {:ok, binary} = Command.encode(cmd)
+      # CommandGroupLength is re-computed, so just verify encode succeeds
+      assert is_binary(binary)
     end
   end
 
-  describe "Command.decode/1" do
-    test "returns {:error, :not_implemented}" do
-      assert {:error, :not_implemented} = Command.decode(<<>>)
+  describe "decode/1" do
+    test "decodes empty binary as empty map" do
+      assert {:ok, %{}} = Command.decode(<<>>)
+    end
+
+    test "returns error for malformed data" do
+      assert {:error, :malformed_command_set} = Command.decode(<<0x01>>)
+    end
+
+    test "roundtrips a full C-STORE-RQ command" do
+      original = %{
+        {0x0000, 0x0002} => "1.2.840.10008.5.1.4.1.1.2",
+        {0x0000, 0x0100} => 0x0001,
+        {0x0000, 0x0110} => 42,
+        {0x0000, 0x0700} => 0,
+        {0x0000, 0x0800} => 0x0000,
+        {0x0000, 0x1000} => "1.2.3.4.5.6.7.8.9"
+      }
+
+      assert {:ok, binary} = Command.encode(original)
+      assert {:ok, decoded} = Command.decode(binary)
+
+      # Verify all original keys present (plus auto-added group length)
+      for {tag, value} <- original do
+        assert decoded[tag] == value, "Mismatch for tag #{inspect(tag)}"
+      end
+    end
+  end
+
+  describe "no_data_set?/1" do
+    test "returns true when CommandDataSetType is 0x0101" do
+      assert Command.no_data_set?(%{{0x0000, 0x0800} => 0x0101})
+    end
+
+    test "returns false when CommandDataSetType is not 0x0101" do
+      refute Command.no_data_set?(%{{0x0000, 0x0800} => 0x0000})
+    end
+
+    test "returns false when CommandDataSetType is missing" do
+      refute Command.no_data_set?(%{})
+    end
+  end
+
+  describe "command_field/1" do
+    test "returns the command field value" do
+      assert Command.command_field(%{{0x0000, 0x0100} => 0x0030}) == 0x0030
+    end
+
+    test "returns nil when missing" do
+      assert Command.command_field(%{}) == nil
+    end
+  end
+
+  describe "message_id/1" do
+    test "returns the message ID" do
+      assert Command.message_id(%{{0x0000, 0x0110} => 42}) == 42
+    end
+  end
+
+  describe "status/1" do
+    test "returns the status code" do
+      assert Command.status(%{{0x0000, 0x0900} => 0x0000}) == 0x0000
+    end
+  end
+
+  describe "affected_sop_class_uid/1" do
+    test "returns the SOP class UID" do
+      assert Command.affected_sop_class_uid(%{{0x0000, 0x0002} => "1.2.3"}) == "1.2.3"
     end
   end
 

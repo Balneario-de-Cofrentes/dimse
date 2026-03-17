@@ -83,6 +83,16 @@ defmodule Dimse.Handler do
             ) ::
               {:ok, [binary()]} | {:error, integer(), String.t()}
 
+  @doc """
+  Returns the set of abstract syntaxes (SOP Class UIDs) this handler supports.
+
+  Override this to declare which SOP Classes your SCP accepts during
+  presentation context negotiation. Defaults to Verification only.
+  """
+  @callback supported_abstract_syntaxes() :: [String.t()]
+
+  @optional_callbacks [supported_abstract_syntaxes: 0]
+
   @doc false
   defmacro __using__(_opts) do
     quote do

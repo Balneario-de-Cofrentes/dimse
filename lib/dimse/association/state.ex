@@ -5,27 +5,6 @@ defmodule Dimse.Association.State do
   Tracks everything needed during the lifetime of a DICOM association:
   socket, negotiated contexts, message assembly buffers, and counters.
 
-  ## Fields
-
-  - `:phase` — current state machine phase (`:idle`, `:negotiating`,
-    `:established`, `:releasing`, `:closed`)
-  - `:socket` — the TCP socket (owned by this process)
-  - `:transport` — Ranch transport module (`:ranch_tcp`)
-  - `:remote_ae_title` — peer Application Entity title
-  - `:local_ae_title` — our Application Entity title
-  - `:max_pdu_length` — negotiated maximum PDU length
-  - `:negotiated_contexts` — `%{context_id => {sop_class_uid, transfer_syntax_uid}}`
-  - `:implementation_uid` — remote implementation class UID
-  - `:implementation_version` — remote implementation version name
-  - `:pdu_buffer` — binary accumulator for incomplete PDU reads
-  - `:current_dimse_message` — accumulator for P-DATA fragment reassembly
-  - `:association_id` — unique ID for telemetry and logging
-  - `:started_at` — monotonic timestamp
-  - `:bytes_received` — counter
-  - `:bytes_sent` — counter
-  - `:handler` — callback module implementing `Dimse.Handler`
-  - `:config` — `Dimse.Association.Config` struct
-
   See PS3.8 Section 9.2 for the Upper Layer state machine specification.
   """
 
@@ -48,7 +27,10 @@ defmodule Dimse.Association.State do
           bytes_received: non_neg_integer(),
           bytes_sent: non_neg_integer(),
           handler: module() | nil,
-          config: Dimse.Association.Config.t() | nil
+          config: Dimse.Association.Config.t() | nil,
+          pending_request: GenServer.from() | nil,
+          pending_release: GenServer.from() | nil,
+          artim_timer: reference() | nil
         }
 
   defstruct phase: :idle,
@@ -67,5 +49,8 @@ defmodule Dimse.Association.State do
             bytes_received: 0,
             bytes_sent: 0,
             handler: nil,
-            config: nil
+            config: nil,
+            pending_request: nil,
+            pending_release: nil,
+            artim_timer: nil
 end

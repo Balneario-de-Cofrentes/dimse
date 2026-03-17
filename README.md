@@ -171,7 +171,7 @@ pure-Elixir DICOM toolkit:
 | SCU client | Yes | Basic | Basic |
 | Telemetry | Yes | No | No |
 | Property tests | StreamData | No | No |
-| Maintained | Active | Abandoned | Abandoned |
+| Maintained | Active | Low activity | Abandoned |
 | License | MIT | MIT | MIT |
 
 ## AI-Assisted Development

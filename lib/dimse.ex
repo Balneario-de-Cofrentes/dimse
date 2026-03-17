@@ -52,16 +52,16 @@ defmodule Dimse do
   Returns `{:ok, listener_ref}` or `{:error, reason}`.
   """
   @spec start_listener(keyword()) :: {:ok, term()} | {:error, term()}
-  def start_listener(_opts \\ []) do
-    {:error, :not_implemented}
+  def start_listener(opts \\ []) do
+    Dimse.Listener.start(opts)
   end
 
   @doc """
   Stops a running DIMSE listener.
   """
   @spec stop_listener(term()) :: :ok | {:error, term()}
-  def stop_listener(_ref) do
-    {:error, :not_implemented}
+  def stop_listener(ref) do
+    Dimse.Listener.stop(ref)
   end
 
   @doc """
@@ -69,8 +69,8 @@ defmodule Dimse do
 
   ## Options
 
-    * `:calling_ae` — local AE title (required)
-    * `:called_ae` — remote AE title (required)
+    * `:calling_ae` — local AE title (default: `"DIMSE"`)
+    * `:called_ae` — remote AE title (default: `"ANY-SCP"`)
     * `:abstract_syntaxes` — list of SOP Class UIDs to propose
     * `:transfer_syntaxes` — list of Transfer Syntax UIDs to propose
     * `:max_pdu_length` — max PDU length (default: `16_384`)
@@ -79,13 +79,13 @@ defmodule Dimse do
   Returns `{:ok, association_pid}` or `{:error, reason}`.
   """
   @spec connect(String.t(), pos_integer(), keyword()) :: {:ok, pid()} | {:error, term()}
-  def connect(_host, _port, _opts \\ []) do
-    {:error, :not_implemented}
+  def connect(host, port, opts \\ []) do
+    Dimse.Scu.open(host, port, opts)
   end
 
   @doc "Sends a C-ECHO request on an established association."
-  @spec echo(pid()) :: :ok | {:error, term()}
-  def echo(_assoc), do: {:error, :not_implemented}
+  @spec echo(pid(), keyword()) :: :ok | {:error, term()}
+  def echo(assoc, opts \\ []), do: Dimse.Scu.Echo.verify(assoc, opts)
 
   @doc "Sends a C-STORE request with the given data set."
   @spec store(pid(), term()) :: :ok | {:error, term()}
@@ -104,10 +104,10 @@ defmodule Dimse do
   def get(_assoc, _level, _query), do: {:error, :not_implemented}
 
   @doc "Sends an A-RELEASE-RQ to gracefully close the association."
-  @spec release(pid()) :: :ok | {:error, term()}
-  def release(_assoc), do: {:error, :not_implemented}
+  @spec release(pid(), timeout()) :: :ok | {:error, term()}
+  def release(assoc, timeout \\ 30_000), do: Dimse.Scu.release(assoc, timeout)
 
   @doc "Sends an A-ABORT to forcefully terminate the association."
-  @spec abort(pid()) :: :ok | {:error, term()}
-  def abort(_assoc), do: {:error, :not_implemented}
+  @spec abort(pid()) :: :ok
+  def abort(assoc), do: Dimse.Scu.abort(assoc)
 end

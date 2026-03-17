@@ -35,29 +35,65 @@ defmodule Dimse.Scu do
   - Unexpected abort → `{:error, {:aborted, source, reason}}`
   """
 
+  @verification_uid "1.2.840.10008.1.1"
+
   @doc """
   Opens a DICOM association to a remote AE.
 
   Returns `{:ok, association_pid}` or `{:error, reason}`.
+
+  ## Options
+
+    * `:calling_ae` — local AE title (default: `"DIMSE"`)
+    * `:called_ae` — remote AE title (default: `"ANY-SCP"`)
+    * `:abstract_syntaxes` — list of SOP Class UIDs (default: Verification)
+    * `:transfer_syntaxes` — list of Transfer Syntax UIDs
+    * `:max_pdu_length` — max PDU length (default: `16_384`)
+    * `:timeout` — connection timeout in ms (default: `30_000`)
   """
   @spec open(String.t(), pos_integer(), keyword()) :: {:ok, pid()} | {:error, term()}
-  def open(_host, _port, _opts \\ []) do
-    {:error, :not_implemented}
+  def open(host, port, opts \\ []) do
+    abstract_syntaxes = Keyword.get(opts, :abstract_syntaxes, [@verification_uid])
+
+    config = %Dimse.Association.Config{
+      ae_title: Keyword.get(opts, :calling_ae, "DIMSE"),
+      max_pdu_length: Keyword.get(opts, :max_pdu_length, 16_384),
+      dimse_timeout: Keyword.get(opts, :timeout, 30_000)
+    }
+
+    assoc_opts =
+      [
+        mode: :scu,
+        host: host,
+        port: port,
+        calling_ae: Keyword.get(opts, :calling_ae, "DIMSE"),
+        called_ae: Keyword.get(opts, :called_ae, "ANY-SCP"),
+        abstract_syntaxes: abstract_syntaxes,
+        config: config,
+        timeout: Keyword.get(opts, :timeout, 30_000)
+      ]
+      |> maybe_add(:transfer_syntaxes, Keyword.get(opts, :transfer_syntaxes))
+
+    # Use start (not start_link) so connection failures don't crash the caller
+    Dimse.Association.start(assoc_opts)
   end
+
+  defp maybe_add(opts, _key, nil), do: opts
+  defp maybe_add(opts, key, value), do: Keyword.put(opts, key, value)
 
   @doc """
   Sends an A-RELEASE-RQ and waits for A-RELEASE-RP.
   """
-  @spec release(pid()) :: :ok | {:error, term()}
-  def release(_assoc) do
-    {:error, :not_implemented}
+  @spec release(pid(), timeout()) :: :ok | {:error, term()}
+  def release(assoc, timeout \\ 30_000) do
+    Dimse.Association.release(assoc, timeout)
   end
 
   @doc """
   Sends an A-ABORT to forcefully terminate the association.
   """
-  @spec abort(pid()) :: :ok | {:error, term()}
-  def abort(_assoc) do
-    {:error, :not_implemented}
+  @spec abort(pid()) :: :ok
+  def abort(assoc) do
+    Dimse.Association.abort(assoc)
   end
 end
