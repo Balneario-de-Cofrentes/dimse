@@ -163,16 +163,22 @@ pure-Elixir DICOM toolkit:
 
 | Feature | dimse | [wolfpacs](https://github.com/wolfpacs/wolfpacs) | [dicom.ex](https://github.com/jjedele/dicom.ex) |
 |---------|-------|----------|----------|
-| Language | Elixir | Elixir | Elixir |
-| PDU decode/encode | All 7 types | Partial | Partial |
-| Association state machine | Full PS3.8 | Simplified | No |
-| DIMSE-C services | C-ECHO/STORE/FIND/MOVE/GET | C-ECHO/STORE | C-ECHO |
-| SCP behaviour | Yes | No | No |
-| SCU client | Yes | Basic | Basic |
-| Telemetry | Yes | No | No |
-| Property tests | StreamData | No | No |
-| Maintained | Active | Low activity | Abandoned |
-| License | MIT | MIT | MIT |
+| Language | Elixir | Erlang | Elixir |
+| PDU decode/encode | All 7 types | 6/7 (no A-ASSOCIATE-RJ) | 6/7 (no A-ABORT) |
+| Association state machine | 5-phase + ARTIM timer | gen_statem (2 states) | GenServer (4 states) |
+| DIMSE-C services | C-ECHO + framework for STORE/FIND/MOVE/GET | C-ECHO, C-STORE | C-ECHO, C-STORE, partial C-FIND |
+| SCP behaviour | `@behaviour` with 5 callbacks | Hardcoded routing | Event handler callbacks |
+| SCU client | Full API (open/release/abort/echo) | gen_statem sender | No SCU |
+| Max PDU fragmentation | Yes (encode + reassembly) | Yes (sender chunking) | Parsed, not enforced |
+| ARTIM timer | PS3.8 compliant (30s default) | No | No |
+| Telemetry | 6 event types | Logger only | Logger only |
+| Transfer syntaxes | IVR LE, EVR LE | 3 uncompressed | 13 registered (3 decoded) |
+| Property tests | StreamData (planned) | proper (extensive) | No |
+| Tests | 104 | ~81 eunit + proper | ~25 |
+| Runtime deps | 3 (dicom, ranch, telemetry) | 2 (ranch, recon) | 0 (stdlib only) |
+| Source LOC | ~2,700 | ~14,500 | ~2,600 (+ 26K tag dict) |
+| Maintained | Active | Active | Active |
+| License | MIT | AGPL-3.0 | Apache-2.0 |
 
 ## AI-Assisted Development
 
