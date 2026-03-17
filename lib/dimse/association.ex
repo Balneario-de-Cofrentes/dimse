@@ -22,7 +22,7 @@ defmodule Dimse.Association do
   alias Dimse.Command.Fields
 
   @implementation_uid "1.2.826.0.1.3680043.8.498.1"
-  @implementation_version "DIMSE_0.1.0"
+  @implementation_version "DIMSE_0.2.0"
 
   @default_transfer_syntaxes MapSet.new([
                                "1.2.840.10008.1.2",
@@ -477,6 +477,14 @@ defmodule Dimse.Association do
   defp dispatch_scp_request(message, state, remaining_pdvs) do
     handler = state.handler
     command_field = Command.command_field(message.command)
+    message_id = Command.message_id(message.command) || 0
+    start_time = System.monotonic_time(:millisecond)
+
+    Telemetry.emit(:command_start, %{system_time: System.system_time()}, %{
+      association_id: state.association_id,
+      command_field: command_field,
+      message_id: message_id
+    })
 
     {status, response_data} =
       case command_field do
@@ -506,16 +514,26 @@ defmodule Dimse.Association do
           {0xC000, nil}
       end
 
+    duration = System.monotonic_time(:millisecond) - start_time
+
+    Telemetry.emit(:command_stop, %{duration: duration}, %{
+      association_id: state.association_id,
+      command_field: command_field,
+      status: status
+    })
+
     # Send response
     response_field = Bitwise.bor(command_field, 0x8000)
 
-    response_command = %{
-      {0x0000, 0x0002} => Command.affected_sop_class_uid(message.command) || "",
-      {0x0000, 0x0100} => response_field,
-      {0x0000, 0x0120} => Command.message_id(message.command) || 0,
-      {0x0000, 0x0800} => 0x0101,
-      {0x0000, 0x0900} => status
-    }
+    response_command =
+      %{
+        {0x0000, 0x0002} => Command.affected_sop_class_uid(message.command) || "",
+        {0x0000, 0x0100} => response_field,
+        {0x0000, 0x0120} => message_id,
+        {0x0000, 0x0800} => 0x0101,
+        {0x0000, 0x0900} => status
+      }
+      |> maybe_put_instance_uid(command_field, message.command)
 
     pdus =
       Message.fragment(response_command, response_data, message.context_id, state.max_pdu_length)
@@ -651,4 +669,14 @@ defmodule Dimse.Association do
   defp generate_id do
     :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
   end
+
+  # C-STORE-RSP must echo back the AffectedSOPInstanceUID (PS3.7 Table 9.1-1)
+  defp maybe_put_instance_uid(cmd, 0x0001, request_command) do
+    case Map.get(request_command, {0x0000, 0x1000}) do
+      nil -> cmd
+      uid -> Map.put(cmd, {0x0000, 0x1000}, uid)
+    end
+  end
+
+  defp maybe_put_instance_uid(cmd, _command_field, _request_command), do: cmd
 end

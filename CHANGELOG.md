@@ -7,16 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-03-18
+
 ### Added
 
-- Project scaffold with module stubs and comprehensive PRD
+- C-STORE SCU (`Dimse.Scu.Store`) — send DICOM instances to remote SCPs
+- `Dimse.store/5` public API with priority and move originator support
+- Command-level telemetry events (`[:dimse, :command_start]`, `[:dimse, :command_stop]`)
+- `AffectedSOPInstanceUID` echo-back in C-STORE-RSP (PS3.7 Table 9.1-1)
+- Property-based tests using StreamData for PDU encode/decode roundtrips
+- `@type t()` specs on all PDU structs (fixes `mix docs` warnings)
+- StreamData generators in test helpers for all PDU types
+- C-STORE integration tests (basic, multiple, large data set fragmentation, mixed echo+store)
+
+## [0.1.0] - 2025-12-15
+
+### Added
+
 - PDU type structs for all 7 DICOM Upper Layer PDU types (PS3.8 Section 9.3)
+- PDU encoder (struct → iodata) and decoder (binary → struct)
+- DIMSE command set encode/decode (Implicit VR Little Endian, group 0000)
 - DIMSE command field constants (PS3.7 Annex E)
 - DIMSE status code constants and classification (PS3.7 Annex C)
-- Association state machine struct (PS3.8 Section 9.2)
-- Handler behaviour for SCP service class implementations
-- Built-in C-ECHO SCP handler
-- Telemetry event definitions and span helpers
+- Association GenServer with 5-phase state machine (PS3.8 Section 9.2)
+- ARTIM timer for connection timeout compliance
+- Presentation context negotiation (abstract syntax + transfer syntax matching)
+- Max PDU length negotiation with automatic message fragmentation
+- Handler behaviour (`Dimse.Handler`) for SCP service class implementations
+- Built-in C-ECHO SCP and SCU
+- SCU client API (`Dimse.Scu.open/3`, release, abort)
+- Ranch TCP acceptor integration
+- Telemetry event definitions for association lifecycle and PDU I/O
 - CI workflow with Elixir 1.16/1.17/1.18 matrix
 
-[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/commits/master
+[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/Balneario-de-Cofrentes/dimse/releases/tag/v0.1.0

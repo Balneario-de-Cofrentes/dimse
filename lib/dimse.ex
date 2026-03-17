@@ -16,7 +16,7 @@ defmodule Dimse do
 
       {:ok, assoc} = Dimse.connect("192.168.1.10", 11112, calling_ae: "MY_SCU", called_ae: "REMOTE_SCP")
       :ok = Dimse.echo(assoc)
-      :ok = Dimse.store(assoc, data_set)
+      :ok = Dimse.store(assoc, sop_class_uid, sop_instance_uid, data_set)
       {:ok, results} = Dimse.find(assoc, :study, query)
       :ok = Dimse.move(assoc, :study, query, dest_ae: "DEST_AE")
       {:ok, data_sets} = Dimse.get(assoc, :study, query)
@@ -87,9 +87,27 @@ defmodule Dimse do
   @spec echo(pid(), keyword()) :: :ok | {:error, term()}
   def echo(assoc, opts \\ []), do: Dimse.Scu.Echo.verify(assoc, opts)
 
-  @doc "Sends a C-STORE request with the given data set."
-  @spec store(pid(), term()) :: :ok | {:error, term()}
-  def store(_assoc, _data_set), do: {:error, :not_implemented}
+  @doc """
+  Sends a C-STORE request with the given data set.
+
+  ## Parameters
+
+    * `assoc` — association pid from `Dimse.connect/3`
+    * `sop_class_uid` — SOP Class UID of the instance
+    * `sop_instance_uid` — SOP Instance UID of the instance
+    * `data` — encoded data set binary
+
+  ## Options
+
+    * `:priority` — request priority (default: `0x0000` medium)
+    * `:move_originator_ae` — AE title of the C-MOVE originator
+    * `:move_originator_message_id` — message ID from the C-MOVE request
+    * `:timeout` — response timeout in ms (default: `30_000`)
+  """
+  @spec store(pid(), String.t(), String.t(), binary(), keyword()) :: :ok | {:error, term()}
+  def store(assoc, sop_class_uid, sop_instance_uid, data, opts \\ []) do
+    Dimse.Scu.Store.send(assoc, sop_class_uid, sop_instance_uid, data, opts)
+  end
 
   @doc "Sends a C-FIND request and returns matching results."
   @spec find(pid(), atom(), term()) :: {:ok, [term()]} | {:error, term()}
