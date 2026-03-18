@@ -79,5 +79,17 @@ defmodule Dimse.Scu.FindTest do
 
       assert {:ok, [<<5, 6>>]} = Find.query(assoc, @study_root_find, <<>>)
     end
+
+    test "returns {:error, {:status, code}} for non-success final status" do
+      {:ok, assoc} =
+        FakeAssociation.start_link({:ok, %{{0x0000, 0x0900} => 0xA700}, []})
+
+      assert {:error, {:status, 0xA700}} = Find.query(assoc, @study_root_find, <<>>)
+    end
+
+    test "propagates transport-level error from association" do
+      {:ok, assoc} = FakeAssociation.start_link({:error, :timeout})
+      assert {:error, :timeout} = Find.query(assoc, @study_root_find, <<>>)
+    end
   end
 end

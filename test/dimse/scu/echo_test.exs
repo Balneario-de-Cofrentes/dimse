@@ -2,6 +2,21 @@ defmodule Dimse.Scu.EchoTest do
   use ExUnit.Case, async: true
 
   alias Dimse.Command.Fields
+  alias Dimse.Scu.Echo
+
+  defmodule FakeAssociation do
+    use GenServer
+
+    def start_link(response), do: GenServer.start_link(__MODULE__, response)
+
+    @impl true
+    def init(response), do: {:ok, response}
+
+    @impl true
+    def handle_call({:dimse_request, _command_set, _data}, _from, response) do
+      {:reply, response, response}
+    end
+  end
 
   describe "verify/2 command construction" do
     test "builds a valid C-ECHO-RQ command set" do
@@ -21,5 +36,13 @@ defmodule Dimse.Scu.EchoTest do
     end
   end
 
-  # Integration tests for verify/2 are in test/dimse/integration_test.exs
+  describe "verify/2 transport error" do
+    test "propagates transport-level error from association" do
+      {:ok, assoc} = FakeAssociation.start_link({:error, :timeout})
+      assert {:error, :timeout} = Echo.verify(assoc)
+    end
+  end
+
+  # Integration tests for verify/2 success and non-success status are in
+  # test/dimse/integration_test.exs
 end

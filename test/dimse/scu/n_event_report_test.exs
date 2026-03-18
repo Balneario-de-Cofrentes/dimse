@@ -4,6 +4,27 @@ defmodule Dimse.Scu.NEventReportTest do
   alias Dimse.Scu.NEventReport
   alias Dimse.Command.Fields
 
+  defmodule FakeAssociation do
+    use GenServer
+
+    def start_link(response), do: GenServer.start_link(__MODULE__, response)
+
+    @impl true
+    def init(response), do: {:ok, response}
+
+    @impl true
+    def handle_call({:dimse_request, _command_set, _data}, _from, response) do
+      {:reply, response, response}
+    end
+  end
+
+  describe "send/6 transport error" do
+    test "propagates transport-level error from association" do
+      {:ok, assoc} = FakeAssociation.start_link({:error, :timeout})
+      assert {:error, :timeout} = NEventReport.send(assoc, "1.2.3", "4.5.6", 1, nil)
+    end
+  end
+
   describe "build_command_set/4" do
     test "uses AffectedSOPClassUID (0000,0002)" do
       cmd = NEventReport.build_command_set("1.2.3", "1.2.3.4", 1, 1)

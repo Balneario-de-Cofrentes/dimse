@@ -7,6 +7,44 @@ defmodule Dimse.AssociationTest do
   @verification_uid "1.2.840.10008.1.1"
   @ct_image_storage "1.2.840.10008.5.1.4.1.1.2"
 
+  # SCP handler that delays echo response — used to keep pending_request alive.
+  # Does NOT implement supported_abstract_syntaxes/0, exercising the L1218 fallback.
+  defmodule SlowEchoHandler do
+    @behaviour Dimse.Handler
+
+    @impl Dimse.Handler
+    def handle_echo(_cmd, _state) do
+      Process.sleep(2_000)
+      {:ok, 0x0000}
+    end
+
+    @impl Dimse.Handler
+    def handle_store(_cmd, _data, _state), do: {:ok, 0x0000}
+
+    @impl Dimse.Handler
+    def handle_find(_cmd, _query, _state), do: {:ok, []}
+
+    @impl Dimse.Handler
+    def handle_move(_cmd, _query, _state), do: {:ok, []}
+
+    @impl Dimse.Handler
+    def handle_get(_cmd, _query, _state), do: {:ok, []}
+  end
+
+  defmodule FakeNAssociation do
+    use GenServer
+
+    def start_link(response), do: GenServer.start_link(__MODULE__, response)
+
+    @impl true
+    def init(response), do: {:ok, response}
+
+    @impl true
+    def handle_call({:dimse_request, _command_set, _data}, _from, response) do
+      {:reply, response, response}
+    end
+  end
+
   describe "start_link/1" do
     test "starts a GenServer process in idle phase" do
       assert {:ok, pid} = Association.start_link([])
@@ -110,6 +148,151 @@ defmodule Dimse.AssociationTest do
     end
   end
 
+  describe "handle_call catch-all" do
+    test "returns :not_established for unrecognised calls in idle state" do
+      {:ok, pid} = Association.start_link([])
+      assert {:error, :not_established} = GenServer.call(pid, :unknown_call_9f3a)
+      GenServer.stop(pid)
+    end
+  end
+
+  describe "handle_cast cancel_find in non-established state" do
+    test "is a no-op when association is in idle phase" do
+      {:ok, pid} = Association.start_link([])
+      # cancel/2 delegates to handle_cast {:cancel_find, _}; must not crash
+      Association.cancel(pid, 99)
+      # Give the cast time to process
+      :timer.sleep(10)
+      assert Process.alive?(pid)
+      GenServer.stop(pid)
+    end
+  end
+
+  describe "handle_info stray messages" do
+    test "{:sub_operation, :next} with nil sub_operation is a no-op" do
+      {:ok, pid} = Association.start_link([])
+      send(pid, {:sub_operation, :next})
+      :timer.sleep(10)
+      assert Process.alive?(pid)
+      GenServer.stop(pid)
+    end
+
+    test "unknown messages are silently ignored" do
+      {:ok, pid} = Association.start_link([])
+      send(pid, {:totally_unknown_message, :some_payload})
+      :timer.sleep(10)
+      assert Process.alive?(pid)
+      GenServer.stop(pid)
+    end
+  end
+
+  describe "Dimse.Scu.open/3 timeout behaviour" do
+    test "returns {:error, :timeout} when timeout: 0 and process just started" do
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: Dimse.Scp.Echo)
+      port = :ranch.get_port(ref)
+
+      assert {:error, :timeout} =
+               Dimse.Scu.open("127.0.0.1", port,
+                 timeout: 0,
+                 abstract_syntaxes: [@verification_uid]
+               )
+
+      Dimse.stop_listener(ref)
+    end
+
+    test "returns {:error, :timeout} when server accepts TCP but never sends A-ASSOCIATE-AC" do
+      {:ok, listen_sock} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listen_sock)
+
+      # Accept so the client's TCP connect succeeds; hold the connection open
+      # for longer than the timeout so we don't get :tcp_closed instead
+      Task.start(fn ->
+        {:ok, conn} = :gen_tcp.accept(listen_sock, 5_000)
+        :timer.sleep(1_000)
+        :gen_tcp.close(conn)
+      end)
+
+      assert {:error, :timeout} =
+               Dimse.Scu.open("127.0.0.1", port,
+                 timeout: 150,
+                 abstract_syntaxes: [@verification_uid]
+               )
+
+      :gen_tcp.close(listen_sock)
+    end
+  end
+
+  describe "Dimse module default-argument stubs" do
+    test "echo/1 (no opts) calls echo/2 with []" do
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: Dimse.Scp.Echo)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port, abstract_syntaxes: [@verification_uid])
+
+      assert :ok = Dimse.echo(assoc)
+      assert :ok = Dimse.release(assoc)
+      Dimse.stop_listener(ref)
+    end
+
+    test "connect/2 (no opts) calls connect/3 with []" do
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: Dimse.Scp.Echo)
+      port = :ranch.get_port(ref)
+
+      # connect/2 defaults to Verification SOP Class
+      assert {:ok, assoc} = Dimse.connect("127.0.0.1", port)
+      assert :ok = Dimse.release(assoc)
+      Dimse.stop_listener(ref)
+    end
+
+    test "store/4 (no opts) calls store/5 with []" do
+      {:ok, fake} = FakeNAssociation.start_link({:ok, %{{0x0000, 0x0900} => 0x0000}, nil})
+      assert :ok = Dimse.store(fake, "1.2.3", "4.5.6", <<1, 2, 3>>)
+    end
+
+    test "move/3 (no opts) raises KeyError because :dest_ae is required" do
+      assert_raise KeyError, fn -> Dimse.move(:dummy_pid, :study, <<>>) end
+    end
+
+    test "start_listener/0 (no opts) raises KeyError because :handler is required" do
+      assert_raise KeyError, fn -> Dimse.start_listener() end
+    end
+
+    test "n_get/3 (no opts) calls n_get/4 with []" do
+      {:ok, fake} = FakeNAssociation.start_link({:ok, %{{0x0000, 0x0900} => 0x0000}, nil})
+      assert {:ok, 0x0000, nil} = Dimse.n_get(fake, "1.2.3", "4.5.6")
+    end
+
+    test "n_set/4 (no opts) calls n_set/5 with []" do
+      {:ok, fake} = FakeNAssociation.start_link({:ok, %{{0x0000, 0x0900} => 0x0000}, nil})
+      assert {:ok, 0x0000, nil} = Dimse.n_set(fake, "1.2.3", "4.5.6", <<1, 2>>)
+    end
+
+    test "n_action/5 (no opts) calls n_action/6 with []" do
+      {:ok, fake} = FakeNAssociation.start_link({:ok, %{{0x0000, 0x0900} => 0x0000}, nil})
+      assert {:ok, 0x0000, nil} = Dimse.n_action(fake, "1.2.3", "4.5.6", 1, nil)
+    end
+
+    test "n_create/3 (no opts) calls n_create/4 with []" do
+      {:ok, fake} =
+        FakeNAssociation.start_link(
+          {:ok, %{{0x0000, 0x0900} => 0x0000, {0x0000, 0x1000} => nil}, nil}
+        )
+
+      assert {:ok, 0x0000, nil, nil} = Dimse.n_create(fake, "1.2.3", nil)
+    end
+
+    test "n_delete/3 (no opts) calls n_delete/4 with []" do
+      {:ok, fake} = FakeNAssociation.start_link({:ok, %{{0x0000, 0x0900} => 0x0000}, nil})
+      assert {:ok, 0x0000, nil} = Dimse.n_delete(fake, "1.2.3", "4.5.6")
+    end
+
+    test "n_event_report/5 (no opts) calls n_event_report/6 with []" do
+      {:ok, fake} = FakeNAssociation.start_link({:ok, %{{0x0000, 0x0900} => 0x0000}, nil})
+      assert {:ok, 0x0000, nil} = Dimse.n_event_report(fake, "1.2.3", "4.5.6", 1, nil)
+    end
+  end
+
   describe "State struct" do
     test "has correct defaults" do
       state = %State{}
@@ -144,6 +327,200 @@ defmodule Dimse.AssociationTest do
       assert config.artim_timeout == 30_000
       assert config.num_acceptors == 10
     end
+  end
+
+  describe "close_connection with pending DIMSE requests" do
+    test "abort replies {:error, :aborted} to in-flight DIMSE request (pending_request)" do
+      # SlowEchoHandler delays 2s — SCP's abstract_syntaxes defaults to Verification (L1218)
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: SlowEchoHandler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} = Dimse.connect("127.0.0.1", port, abstract_syntaxes: [@verification_uid])
+      assert :ok = wait_for_established(assoc)
+
+      # Start echo in a background task — SlowEchoHandler blocks before responding
+      task = Task.async(fn -> Dimse.echo(assoc, timeout: 10_000) end)
+      # Allow time for the request to be sent and pending_request to be set
+      :timer.sleep(100)
+
+      # Abort while the echo request is pending — triggers pending_request reply
+      Dimse.abort(assoc)
+
+      assert {:error, _} = Task.await(task, 3_000)
+      Dimse.stop_listener(ref)
+    end
+
+    test "tcp_closed replies {:error, :tcp_closed} to pending release" do
+      # Use a raw TCP server that sends A-ASSOCIATE-AC then drops A-RELEASE-RQ
+      # without responding, causing the SCU to get tcp_closed while releasing.
+      {:ok, listen_sock} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listen_sock)
+
+      test_pid = self()
+
+      Task.start(fn ->
+        {:ok, conn} = :gen_tcp.accept(listen_sock, 5_000)
+        # Read the A-ASSOCIATE-RQ (discard it)
+        {:ok, _rq_data} = :gen_tcp.recv(conn, 0, 1_000)
+        # Build a minimal valid A-ASSOCIATE-AC and send it
+        ac_pdu = build_associate_ac()
+        :gen_tcp.send(conn, ac_pdu)
+        # Wait until SCU sends A-RELEASE-RQ, then close without responding
+        {:ok, _release_rq} = :gen_tcp.recv(conn, 0, 5_000)
+        send(test_pid, :release_rq_received)
+        :gen_tcp.close(conn)
+      end)
+
+      {:ok, assoc} =
+        Dimse.Scu.open("127.0.0.1", port,
+          timeout: 5_000,
+          abstract_syntaxes: [@verification_uid]
+        )
+
+      # Start release in a background task
+      task = Task.async(fn -> Association.release(assoc, 10_000) end)
+      assert_receive :release_rq_received, 3_000
+
+      # Connection already closed by server — release should get tcp_closed
+      assert {:error, :tcp_closed} = Task.await(task, 3_000)
+      :gen_tcp.close(listen_sock)
+    end
+  end
+
+  describe "Dimse.Association default-argument stubs" do
+    test "request/2 (no data or timeout) calls request/4 with nil, 30_000" do
+      {:ok, pid} = Association.start_link([])
+      assert {:error, :not_established} = Association.request(pid, %{})
+      GenServer.stop(pid)
+    end
+
+    test "find_request/3 (no timeout) calls find_request/4 with 30_000" do
+      {:ok, pid} = Association.start_link([])
+      assert {:error, :not_established} = Association.find_request(pid, %{}, <<>>)
+      GenServer.stop(pid)
+    end
+
+    test "get_request/3 (no timeout) calls get_request/4 with 30_000" do
+      {:ok, pid} = Association.start_link([])
+      assert {:error, :not_established} = Association.get_request(pid, %{}, <<>>)
+      GenServer.stop(pid)
+    end
+
+    test "release/1 (no timeout) calls release/2 with 30_000" do
+      {:ok, pid} = Association.start_link([])
+      assert {:error, :not_established} = Association.release(pid)
+      GenServer.stop(pid)
+    end
+  end
+
+  describe "Dimse.Scu default-argument stubs" do
+    test "open/2 (no opts) establishes an association with defaults" do
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: Dimse.Scp.Echo)
+      port = :ranch.get_port(ref)
+
+      assert {:ok, assoc} = Dimse.Scu.open("127.0.0.1", port)
+      assert :ok = Dimse.Scu.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+
+    test "release/1 (no timeout) calls release/2 with 30_000" do
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: Dimse.Scp.Echo)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} = Dimse.connect("127.0.0.1", port)
+      assert :ok = Dimse.Scu.release(assoc)
+      Dimse.stop_listener(ref)
+    end
+  end
+
+  describe "Association handles tcp_closed during established" do
+    test "association exits with :tcp_closed when remote side closes unexpectedly" do
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: Dimse.Scp.Echo)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "TEST_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@verification_uid]
+        )
+
+      assert :ok = wait_for_established(assoc)
+      pid_ref = Process.monitor(assoc)
+
+      # Stop the listener — Ranch terminates the SCP connection, closing the
+      # socket. The SCU association receives {:tcp_closed, socket} and exits.
+      Dimse.stop_listener(ref)
+
+      assert_receive {:DOWN, ^pid_ref, :process, ^assoc, :tcp_closed}, 2_000
+    end
+  end
+
+  describe "Dimse.Scu.open/3 A-ABORT handling" do
+    test "returns {:error, {:aborted, source, reason}} when SCP sends A-ABORT during negotiation" do
+      {:ok, listen_sock} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listen_sock)
+
+      # A-ABORT PDU: item-type=0x07, reserved, PDU-length=4, reserved×2, source=2, reason=0
+      a_abort_pdu = <<0x07, 0x00, 0, 0, 0, 4, 0, 0, 2, 0>>
+
+      Task.start(fn ->
+        {:ok, conn} = :gen_tcp.accept(listen_sock, 5_000)
+        # Brief wait so A-ASSOCIATE-RQ arrives, then abort
+        :timer.sleep(20)
+        :gen_tcp.send(conn, a_abort_pdu)
+        :timer.sleep(200)
+        :gen_tcp.close(conn)
+      end)
+
+      assert {:error, {:aborted, _source, _reason}} =
+               Dimse.Scu.open("127.0.0.1", port,
+                 timeout: 2_000,
+                 abstract_syntaxes: [@verification_uid]
+               )
+
+      :gen_tcp.close(listen_sock)
+    end
+  end
+
+  # Builds a minimal valid A-ASSOCIATE-AC PDU accepting presentation context 1
+  # with Verification SOP Class / Implicit VR Little Endian.
+  defp build_associate_ac do
+    transfer_syntax = "1.2.840.10008.1.2"
+    impl_uid = "1.2.826.0.1.3680043.8.498.1"
+    app_context_name = "1.2.840.10008.3.1.1.1"
+
+    # Application Context Item (0x10)
+    app_ctx = encode_sub_item(0x10, app_context_name)
+
+    # Presentation Context Result Item (0x21): id=1, result=0 (accepted)
+    ts_item = encode_sub_item(0x40, transfer_syntax)
+    pc_item = encode_sub_item(0x21, <<1, 0, 0, 0>> <> ts_item)
+
+    # User Information Item (0x50) with max-length (0x51) and impl UID (0x52)
+    max_len_item = <<0x51, 0x00, 0, 4, 0, 0, 0x40, 0x00>>
+    impl_uid_item = encode_sub_item(0x52, impl_uid)
+    user_info = encode_sub_item(0x50, max_len_item <> impl_uid_item)
+
+    # Fixed header fields: protocol-version, reserved, called/calling AE, 32 reserved
+    called = String.pad_trailing("DIMSE", 16)
+    calling = String.pad_trailing("DIMSE", 16)
+    reserved32 = :binary.copy(<<0>>, 32)
+
+    payload =
+      <<0x00, 0x01, 0x00, 0x00>> <>
+        called <>
+        calling <>
+        reserved32 <>
+        app_ctx <>
+        pc_item <>
+        user_info
+
+    <<0x02, 0x00, byte_size(payload)::32>> <> payload
+  end
+
+  defp encode_sub_item(type, data) when is_binary(data) do
+    <<type, 0x00, byte_size(data)::16>> <> data
   end
 
   defp wait_for_established(assoc, timeout \\ 2_000) do

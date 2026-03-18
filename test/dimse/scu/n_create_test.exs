@@ -4,6 +4,27 @@ defmodule Dimse.Scu.NCreateTest do
   alias Dimse.Scu.NCreate
   alias Dimse.Command.Fields
 
+  defmodule FakeAssociation do
+    use GenServer
+
+    def start_link(response), do: GenServer.start_link(__MODULE__, response)
+
+    @impl true
+    def init(response), do: {:ok, response}
+
+    @impl true
+    def handle_call({:dimse_request, _command_set, _data}, _from, response) do
+      {:reply, response, response}
+    end
+  end
+
+  describe "send/4 transport error" do
+    test "propagates transport-level error from association" do
+      {:ok, assoc} = FakeAssociation.start_link({:error, :timeout})
+      assert {:error, :timeout} = NCreate.send(assoc, "1.2.3", nil)
+    end
+  end
+
   describe "build_command_set/3" do
     test "uses AffectedSOPClassUID (0000,0002)" do
       cmd = NCreate.build_command_set("1.2.3", 1)

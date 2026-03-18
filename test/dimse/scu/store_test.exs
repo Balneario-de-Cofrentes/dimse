@@ -2,7 +2,34 @@ defmodule Dimse.Scu.StoreTest do
   use ExUnit.Case, async: true
 
   alias Dimse.Command.Fields
+  alias Dimse.Scu.Store
   alias Dimse.Test.PduHelpers
+
+  defmodule FakeAssociation do
+    use GenServer
+
+    def start_link(response), do: GenServer.start_link(__MODULE__, response)
+
+    @impl true
+    def init(response), do: {:ok, response}
+
+    @impl true
+    def handle_call({:dimse_request, _command_set, _data}, _from, response) do
+      {:reply, response, response}
+    end
+  end
+
+  describe "send/5 response handling" do
+    test "returns {:error, {:status, code}} for non-success C-STORE-RSP status" do
+      {:ok, assoc} = FakeAssociation.start_link({:ok, %{{0x0000, 0x0900} => 0x0122}, nil})
+      assert {:error, {:status, 0x0122}} = Store.send(assoc, "1.2.3", "4.5.6", <<1, 2, 3>>)
+    end
+
+    test "propagates transport-level error from association" do
+      {:ok, assoc} = FakeAssociation.start_link({:error, :timeout})
+      assert {:error, :timeout} = Store.send(assoc, "1.2.3", "4.5.6", <<1, 2, 3>>)
+    end
+  end
 
   describe "command construction" do
     test "builds a valid C-STORE-RQ command set" do

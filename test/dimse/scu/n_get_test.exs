@@ -73,5 +73,10 @@ defmodule Dimse.Scu.NGetTest do
 
       assert {:error, {:status, 0xC000, nil}} = NGet.query(assoc, "1.2.3", "1.2.3.4")
     end
+
+    test "propagates transport-level error from association" do
+      {:ok, assoc} = FakeAssociation.start_link({:error, :timeout})
+      assert {:error, :timeout} = NGet.query(assoc, "1.2.3", "1.2.3.4")
+    end
   end
 end

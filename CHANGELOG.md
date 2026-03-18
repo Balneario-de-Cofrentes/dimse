@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-03-18
+
+### Added
+
+- 17 additional tests for default-argument stubs, abort paths, and tcp_closed scenarios; total 340 tests, 95.79% coverage
+
+### Fixed
+
+- `reverse_ui_list_fields/1` fast path: skips struct rebuild for plain associations without Extended Negotiation sub-items (common case)
+
+### Changed
+
+- README trimmed and updated with block-letter logo
+- Removed stale `docs/PRD.md`
+
 ## [0.7.0] - 2026-03-18
 
 ### Added
@@ -19,7 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `:role_selections` and `:user_identity` opts for `Dimse.connect/3` and `Dimse.Scu.open/3`
 - SCP echoes back role selections filtered to accepted SOP classes in A-ASSOCIATE-AC
 - Server response from `handle_authenticate/2` included in A-ASSOCIATE-AC when SCU requested positive response
-- 28 new tests: 23 PDU unit tests + 5 Extended Negotiation integration tests
+- 45 new tests: 23 PDU unit tests + 5 Extended Negotiation integration tests + 17 coverage tests for default-arg stubs, abort paths, and tcp_closed scenarios
 
 ### Changed
 
@@ -182,7 +197,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Telemetry event definitions for association lifecycle and PDU I/O
 - CI workflow with Elixir 1.16/1.17/1.18 matrix
 
-[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.5.1...v0.6.0

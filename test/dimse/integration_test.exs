@@ -2109,6 +2109,132 @@ defmodule Dimse.IntegrationTest do
       Dimse.stop_listener(ref)
     end
   end
+
+  # ── Query level routing ──────────────────────────────────────────────────────
+
+  describe "query level routing" do
+    test "find/move/get with binary SOP class UID (string passthrough)" do
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: QuerySupportHandler)
+      port = :ranch.get_port(ref)
+
+      find_uid = @study_root_find
+      move_uid = @study_root_move
+      get_uid = @study_root_get
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "TEST_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [find_uid, move_uid, get_uid]
+        )
+
+      wait_for_established(assoc)
+
+      # Binary UID string passed directly — covers resolve_*_sop_class/1 binary clause
+      assert {:ok, []} = Dimse.find(assoc, find_uid, <<>>, timeout: 5_000)
+      assert {:ok, _} = Dimse.move(assoc, move_uid, <<>>, dest_ae: "DIMSE", timeout: 5_000)
+      assert {:ok, []} = Dimse.get(assoc, get_uid, <<>>, timeout: 5_000)
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+
+    test "find with unknown query level returns error without network call" do
+      # No assoc needed — rejected before any network I/O
+      assert {:error, {:unknown_query_level, :no_such_level}} =
+               Dimse.find(:dummy_pid, :no_such_level, <<>>)
+    end
+
+    test "move with unknown query level returns error without network call" do
+      assert {:error, {:unknown_query_level, :no_such_level}} =
+               Dimse.move(:dummy_pid, :no_such_level, <<>>, dest_ae: "X")
+    end
+
+    test "get with unknown query level returns error without network call" do
+      assert {:error, {:unknown_query_level, :no_such_level}} =
+               Dimse.get(:dummy_pid, :no_such_level, <<>>)
+    end
+  end
+
+  # ── C-ECHO non-success status ────────────────────────────────────────────────
+
+  describe "C-ECHO non-success DIMSE status" do
+    test "SCP returning non-success status yields {:error, {:status, code}}" do
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: FailingEchoHandler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "TEST_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: ["1.2.840.10008.1.1"]
+        )
+
+      wait_for_established(assoc)
+
+      assert {:error, {:status, 0xC001}} = Dimse.echo(assoc, timeout: 5_000)
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+  end
+
+  # ── Association edge cases ───────────────────────────────────────────────────
+
+  describe "Association edge cases" do
+    test "cancel without active find is a no-op" do
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: Dimse.Scp.Echo)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "TEST_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: ["1.2.840.10008.1.1"]
+        )
+
+      wait_for_established(assoc)
+
+      # Cancel on association with no pending find — must not crash
+      :ok = Dimse.cancel(assoc, 999)
+      assert :ok = Dimse.echo(assoc, timeout: 5_000)
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+
+    test "Dimse.Scu.abort/1 terminates association" do
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: Dimse.Scp.Echo)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "TEST_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: ["1.2.840.10008.1.1"]
+        )
+
+      wait_for_established(assoc)
+      mon = Process.monitor(assoc)
+      :ok = Dimse.Scu.abort(assoc)
+      assert_receive {:DOWN, ^mon, :process, ^assoc, _}, 2_000
+      Dimse.stop_listener(ref)
+    end
+
+    test "connection to closed port yields error" do
+      # Find a free port then close it so the connection is refused
+      {:ok, sock} = :gen_tcp.listen(0, [])
+      {:ok, closed_port} = :inet.port(sock)
+      :gen_tcp.close(sock)
+
+      assert {:error, _reason} =
+               Dimse.connect("127.0.0.1", closed_port,
+                 calling_ae: "SCU",
+                 called_ae: "SCP",
+                 abstract_syntaxes: ["1.2.840.10008.1.1"],
+                 timeout: 2_000
+               )
+    end
+  end
 end
 
 # ── Extended Negotiation test handler modules ────────────────────────────────
@@ -2183,4 +2309,53 @@ defmodule ExtNegBadAuthHandler do
 
   @impl true
   def handle_authenticate(_identity, _state), do: {:error, :bad_credentials}
+end
+
+defmodule FailingEchoHandler do
+  @behaviour Dimse.Handler
+
+  @impl true
+  def supported_abstract_syntaxes, do: ["1.2.840.10008.1.1"]
+
+  @impl true
+  # Return non-success status to exercise Scu.Echo error branch
+  def handle_echo(_command, _state), do: {:ok, 0xC001}
+
+  @impl true
+  def handle_store(_command, _data, _state), do: {:ok, 0x0000}
+
+  @impl true
+  def handle_find(_command, _query, _state), do: {:ok, []}
+
+  @impl true
+  def handle_move(_command, _query, _state), do: {:ok, []}
+
+  @impl true
+  def handle_get(_command, _query, _state), do: {:ok, []}
+end
+
+defmodule QuerySupportHandler do
+  @behaviour Dimse.Handler
+
+  @study_root_find "1.2.840.10008.5.1.4.1.2.2.1"
+  @study_root_move "1.2.840.10008.5.1.4.1.2.2.2"
+  @study_root_get "1.2.840.10008.5.1.4.1.2.2.3"
+
+  @impl true
+  def supported_abstract_syntaxes, do: [@study_root_find, @study_root_move, @study_root_get]
+
+  @impl true
+  def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+  @impl true
+  def handle_store(_command, _data, _state), do: {:ok, 0x0000}
+
+  @impl true
+  def handle_find(_command, _query, _state), do: {:ok, []}
+
+  @impl true
+  def handle_move(_command, _query, _state), do: {:ok, []}
+
+  @impl true
+  def handle_get(_command, _query, _state), do: {:ok, []}
 end

@@ -19,4 +19,15 @@ defmodule Dimse.ListenerTest do
       assert spec1 == spec2
     end
   end
+
+  describe "start/1 error handling" do
+    test "returns {:error, _} when port is already in use" do
+      {:ok, ref1} = Listener.start(port: 0, handler: Dimse.Scp.Echo)
+      port = :ranch.get_port(ref1)
+
+      assert {:error, _} = Listener.start(port: port, handler: Dimse.Scp.Echo)
+
+      Listener.stop(ref1)
+    end
+  end
 end

@@ -419,4 +419,64 @@ defmodule Dimse.Pdu.ExtendedNegotiationTest do
       assert decoded.user_information.user_identity_ac.server_response == "server-token"
     end
   end
+
+  # ── Encoder edge cases ────────────────────────────────────────────────────────
+
+  describe "Encoder empty-list guards" do
+    test "encode_role_selections([]) produces same result as nil" do
+      rq_nil = base_rq(base_ui(role_selections: nil))
+      rq_empty = base_rq(base_ui(role_selections: []))
+
+      assert IO.iodata_to_binary(Encoder.encode(rq_nil)) ==
+               IO.iodata_to_binary(Encoder.encode(rq_empty))
+    end
+
+    test "encode_sop_class_extended_list([]) produces same result as nil" do
+      rq_nil = base_rq(base_ui(sop_class_extended: nil))
+      rq_empty = base_rq(base_ui(sop_class_extended: []))
+
+      assert IO.iodata_to_binary(Encoder.encode(rq_nil)) ==
+               IO.iodata_to_binary(Encoder.encode(rq_empty))
+    end
+
+    test "encode_sop_class_common_extended_list([]) produces same result as nil" do
+      rq_nil = base_rq(base_ui(sop_class_common_extended: nil))
+      rq_empty = base_rq(base_ui(sop_class_common_extended: []))
+
+      assert IO.iodata_to_binary(Encoder.encode(rq_nil)) ==
+               IO.iodata_to_binary(Encoder.encode(rq_empty))
+    end
+
+    test "pdv_flags catch-all: nil boolean fields default to 0x00" do
+      pdv = %Pdu.PresentationDataValue{context_id: 1, is_command: nil, is_last: nil, data: <<1>>}
+      pdata = %Pdu.PDataTf{pdv_items: [pdv]}
+      binary = IO.iodata_to_binary(Encoder.encode(pdata))
+      assert {:ok, %Pdu.PDataTf{pdv_items: [decoded]}, <<>>} = Decoder.decode(binary)
+      # nil treated as false/false → flags byte = 0x00 → is_command=false, is_last=false
+      assert decoded.is_command == false
+      assert decoded.is_last == false
+    end
+  end
+
+  # ── Decoder malformed uid_list ─────────────────────────────────────────────
+
+  describe "SopClassCommonExtendedNegotiation malformed related UIDs" do
+    test "malformed uid_list (stated uid_len > available bytes in block) returns error" do
+      # Build a 0x57 item where the related_uids block claims uid_len=100 but only has 2 bytes
+      sop_uid = @ct_uid
+      svc_uid = @sr_uid
+      sop_len = byte_size(sop_uid)
+      svc_len = byte_size(svc_uid)
+      # related block: uid_len=100 but only 2 bytes follow → parse_uid_list fails
+      related_block = <<100::16, "AB"::binary>>
+
+      item_data =
+        <<sop_len::16, sop_uid::binary, svc_len::16, svc_uid::binary,
+          byte_size(related_block)::16, related_block::binary>>
+
+      item_len = byte_size(item_data)
+      ext_item = <<0x57, 0x00, item_len::16>> <> item_data
+      assert {:error, _} = Decoder.decode(rq_binary_with_raw_ui(ext_item))
+    end
+  end
 end

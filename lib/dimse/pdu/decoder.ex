@@ -467,6 +467,16 @@ defmodule Dimse.Pdu.Decoder do
   defp parse_user_identity_ac(_), do: {:error, :malformed_user_identity_ac}
 
   # Reverses list fields that were accumulated in reverse order during parsing
+  # Fast path: no list fields were accumulated (common case — plain association)
+  defp reverse_ui_list_fields(
+         %Pdu.UserInformation{
+           role_selections: nil,
+           sop_class_extended: nil,
+           sop_class_common_extended: nil
+         } = ui
+       ),
+       do: ui
+
   defp reverse_ui_list_fields(%Pdu.UserInformation{} = ui) do
     %{
       ui
