@@ -1,0 +1,107 @@
+# Interop testing infrastructure for Dimse DICOM networking library.
+#
+# Usage:
+#   docker compose -f docker-compose.interop.yml up -d
+#   mix test --only interop
+#   docker compose -f docker-compose.interop.yml down
+#
+# Each service exposes a DICOM AE on a fixed port for deterministic testing.
+# The dimse-scp service is built from the project itself (mix release).
+
+services:
+  # DCMTK toolkit — provides echoscu, storescu, findscu, movescu, storescp
+  dcmtk:
+    image: dicomtools/dcmtk:latest
+    container_name: dimse-interop-dcmtk
+    # Run storescp as the primary process (listens for C-STORE/C-ECHO)
+    command: ["storescp", "--aetitle", "DCMTK_SCP", "--output-directory", "/tmp/dcmtk", "11112"]
+    ports:
+      - "14112:11112"
+    volumes:
+      - dcmtk-data:/tmp/dcmtk
+    healthcheck:
+      test: ["CMD", "echoscu", "localhost", "11112"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Orthanc DICOM server — full-featured PACS with REST API
+  orthanc:
+    image: orthancteam/orthanc:latest
+    container_name: dimse-interop-orthanc
+    ports:
+      - "14242:4242"   # DICOM
+      - "18042:8042"   # HTTP API
+    environment:
+      ORTHANC__DICOM_AET: "ORTHANC"
+      ORTHANC__DICOM_PORT: "4242"
+      ORTHANC__REGISTERED_USERS: '{"orthanc": "orthanc"}'
+      ORTHANC__DICOM_CHECK_CALLED_AET: "false"
+      ORTHANC__DICOM_CHECK_MODAL_AET: "false"
+    volumes:
+      - orthanc-data:/var/lib/orthanc/db
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8042/system"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # pynetdicom — Python DICOM networking (provides alternative SCP/SCU)
+  pynetdicom:
+    image: python:3.12-slim
+    container_name: dimse-interop-pynetdicom
+    command: >
+      bash -c "pip install --quiet pynetdicom &&
+      python -c \"
+      from pynetdicom import AE, evt, AllStoragePresentationContexts
+      from pynetdicom.sop_class import Verification
+      import signal, sys
+
+      def handle_store(event):
+          return 0x0000
+
+      def handle_echo(event):
+          return 0x0000
+
+      handlers = [
+          (evt.EVT_C_STORE, handle_store),
+          (evt.EVT_C_ECHO, handle_echo),
+      ]
+
+      ae = AE(ae_title='PYNET_SCP')
+      ae.add_supported_context(Verification)
+      for cx in AllStoragePresentationContexts:
+          ae.add_supported_context(cx.abstract_syntax)
+
+      server = ae.start_server(('0.0.0.0', 11113), block=False, evt_handlers=handlers)
+      signal.signal(signal.SIGTERM, lambda s, f: (server.shutdown(), sys.exit(0)))
+      signal.pause()
+      \""
+    ports:
+      - "14113:11113"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('localhost',11113),2); s.close()"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Dimse's own SCP — built from this project for self-interop testing
+  dimse-scp:
+    build:
+      context: .
+      dockerfile: Dockerfile.interop
+    container_name: dimse-interop-scp
+    ports:
+      - "14114:11112"
+    environment:
+      DIMSE_PORT: "11112"
+      DIMSE_AE_TITLE: "DIMSE_SCP"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "nc -z localhost 11112"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  dcmtk-data:
+  orthanc-data:

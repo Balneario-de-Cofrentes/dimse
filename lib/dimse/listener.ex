@@ -26,6 +26,7 @@ defmodule Dimse.Listener do
   """
 
   alias Dimse.Association.Config
+  alias Dimse.Tls
 
   @doc """
   Returns a child spec for the Ranch listener.
@@ -105,7 +106,8 @@ defmodule Dimse.Listener do
       ae_title: Keyword.get(opts, :ae_title, "DIMSE"),
       max_pdu_length: Keyword.get(opts, :max_pdu_length, 16_384),
       max_associations: max_associations,
-      num_acceptors: num_acceptors
+      num_acceptors: num_acceptors,
+      artim_timeout: Keyword.get(opts, :artim_timeout, 30_000)
     }
 
     base_socket_opts = [port: port]
@@ -116,8 +118,7 @@ defmodule Dimse.Listener do
           {:ranch_tcp, base_socket_opts}
 
         tls when is_list(tls) ->
-          # Convert string paths to charlists for :ssl
-          ssl_opts = Enum.map(tls, &normalize_tls_opt/1)
+          ssl_opts = Tls.normalize_opts(tls)
           {:ranch_ssl, base_socket_opts ++ ssl_opts}
       end
 
@@ -134,14 +135,6 @@ defmodule Dimse.Listener do
 
     {transport_mod, transport_opts, protocol_opts}
   end
-
-  # :ssl expects file paths as charlists
-  defp normalize_tls_opt({key, value})
-       when key in [:certfile, :keyfile, :cacertfile] and is_binary(value) do
-    {key, to_charlist(value)}
-  end
-
-  defp normalize_tls_opt(opt), do: opt
 
   defp listener_ref(opts) do
     Keyword.get(opts, :ref, {__MODULE__, make_ref()})

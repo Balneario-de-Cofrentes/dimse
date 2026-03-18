@@ -37,7 +37,7 @@ defmodule Dimse.Scu.NCreate do
       {0x0000, 0x0110} => message_id,
       {0x0000, 0x0800} => data_set_type
     }
-    |> maybe_put({0x0000, 0x1000}, Keyword.get(opts, :sop_instance_uid))
+    |> Dimse.Scu.put_if({0x0000, 0x1000}, Keyword.get(opts, :sop_instance_uid))
   end
 
   @doc """
@@ -69,9 +69,6 @@ defmodule Dimse.Scu.NCreate do
         err
     end
   end
-
-  defp maybe_put(map, _tag, nil), do: map
-  defp maybe_put(map, tag, value), do: Map.put(map, tag, value)
 
   defp normalize_response(response, data) do
     status = Dimse.Command.status(response)

@@ -110,6 +110,11 @@ defmodule Dimse.Scu do
     end
   end
 
+  @doc false
+  @spec put_if(map(), term(), term()) :: map()
+  def put_if(map, _tag, nil), do: map
+  def put_if(map, tag, value), do: Map.put(map, tag, value)
+
   defp maybe_add(opts, _key, nil), do: opts
   defp maybe_add(opts, key, value), do: Keyword.put(opts, key, value)
 

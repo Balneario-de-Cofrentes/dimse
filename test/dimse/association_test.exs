@@ -523,6 +523,105 @@ defmodule Dimse.AssociationTest do
     <<type, 0x00, byte_size(data)::16>> <> data
   end
 
+  describe "Scu.open/3 exit normalization" do
+    test "returns {:error, :closed} when association process exits normally during await" do
+      # Start a raw TCP server that accepts and immediately closes
+      {:ok, listen_sock} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listen_sock)
+
+      Task.start(fn ->
+        {:ok, conn} = :gen_tcp.accept(listen_sock, 5_000)
+        # Close immediately — Association process exits :normal before negotiation
+        :gen_tcp.close(conn)
+      end)
+
+      result =
+        Dimse.Scu.open("127.0.0.1", port,
+          timeout: 3_000,
+          abstract_syntaxes: [@verification_uid]
+        )
+
+      # Should normalize the exit reason to an error tuple
+      assert {:error, _reason} = result
+      :gen_tcp.close(listen_sock)
+    end
+
+    test "returns {:error, {:aborted, ...}} when SCP sends A-ABORT and process exits with shutdown" do
+      {:ok, listen_sock} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listen_sock)
+
+      # SCP sends A-ABORT immediately — the Association exits with {:aborted, source, reason}
+      # which may be wrapped in {:shutdown, ...}
+      a_abort_pdu = <<0x07, 0x00, 0, 0, 0, 4, 0, 0, 0, 0>>
+
+      Task.start(fn ->
+        {:ok, conn} = :gen_tcp.accept(listen_sock, 5_000)
+        {:ok, _rq} = :gen_tcp.recv(conn, 0, 1_000)
+        :gen_tcp.send(conn, a_abort_pdu)
+        :timer.sleep(100)
+        :gen_tcp.close(conn)
+      end)
+
+      assert {:error, _} =
+               Dimse.Scu.open("127.0.0.1", port,
+                 timeout: 3_000,
+                 abstract_syntaxes: [@verification_uid]
+               )
+
+      :gen_tcp.close(listen_sock)
+    end
+
+    test "returns {:error, :closed} when association process exits :normal (monitor path)" do
+      {:ok, listen_sock} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listen_sock)
+
+      # Send a garbage response that causes the Association to stop normally
+      Task.start(fn ->
+        {:ok, conn} = :gen_tcp.accept(listen_sock, 5_000)
+        {:ok, _rq} = :gen_tcp.recv(conn, 0, 1_000)
+        # Send invalid PDU (type 0xFF) — Association should abort/close
+        :gen_tcp.send(conn, <<0xFF, 0x00, 0, 0, 0, 0>>)
+        :timer.sleep(200)
+        :gen_tcp.close(conn)
+      end)
+
+      assert {:error, _} =
+               Dimse.Scu.open("127.0.0.1", port,
+                 timeout: 3_000,
+                 abstract_syntaxes: [@verification_uid]
+               )
+
+      :gen_tcp.close(listen_sock)
+    end
+  end
+
+  describe "Scu.put_if/3" do
+    test "returns map unchanged when value is nil" do
+      assert %{a: 1} = Dimse.Scu.put_if(%{a: 1}, :b, nil)
+    end
+
+    test "adds key when value is non-nil" do
+      assert %{a: 1, b: 2} = Dimse.Scu.put_if(%{a: 1}, :b, 2)
+    end
+  end
+
+  describe "Scu.normalize_n_response/2" do
+    test "returns {:ok, status, data} for success status" do
+      response = %{{0x0000, 0x0900} => 0x0000}
+      assert {:ok, 0x0000, <<1, 2>>} = Dimse.Scu.normalize_n_response(response, <<1, 2>>)
+    end
+
+    test "returns {:ok, status, data} for warning status" do
+      response = %{{0x0000, 0x0900} => 0x0001}
+      assert {:ok, 0x0001, nil} = Dimse.Scu.normalize_n_response(response, nil)
+    end
+
+    test "returns {:error, {:status, code, data}} for failure status" do
+      response = %{{0x0000, 0x0900} => 0xC000}
+      assert {:error, {:status, 0xC000, <<1>>}} = Dimse.Scu.normalize_n_response(response, <<1>>)
+    end
+  end
+
   defp wait_for_established(assoc, timeout \\ 2_000) do
     contexts = Dimse.Association.negotiated_contexts(assoc)
 

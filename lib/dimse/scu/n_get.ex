@@ -39,7 +39,7 @@ defmodule Dimse.Scu.NGet do
       {0x0000, 0x0800} => 0x0101,
       {0x0000, 0x1001} => sop_instance_uid
     }
-    |> maybe_put({0x0000, 0x1005}, Keyword.get(opts, :attribute_identifier_list))
+    |> Dimse.Scu.put_if({0x0000, 0x1005}, Keyword.get(opts, :attribute_identifier_list))
   end
 
   @doc """
@@ -65,7 +65,4 @@ defmodule Dimse.Scu.NGet do
         err
     end
   end
-
-  defp maybe_put(map, _tag, nil), do: map
-  defp maybe_put(map, tag, value), do: Map.put(map, tag, value)
 end

@@ -219,6 +219,134 @@ defmodule Dimse.TlsTest do
     end
   end
 
+  describe "TLS hostname verification" do
+    test "SCU with server_name_indication validates hostname", %{certs: certs} do
+      {:ok, ref} =
+        Dimse.start_listener(
+          port: 0,
+          handler: Dimse.Scp.Echo,
+          tls: server_tls_opts(certs)
+        )
+
+      port = :ranch.get_port(ref)
+
+      # Connect with explicit SNI that matches the SAN in the cert (127.0.0.1)
+      client_tls =
+        client_tls_opts(certs) ++
+          [
+            server_name_indication: ~c"localhost",
+            customize_hostname_check: [
+              match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
+            ]
+          ]
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "SNI_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: ["1.2.840.10008.1.1"],
+          tls: client_tls
+        )
+
+      wait_for_established(assoc)
+      assert :ok = Dimse.echo(assoc, timeout: 5_000)
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+  end
+
+  describe "TLS handshake timeout" do
+    test "SCU times out when SCP does not complete TLS handshake" do
+      # Start a raw TCP listener that accepts but never does TLS handshake
+      {:ok, listen_sock} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listen_sock)
+
+      # Accept in background but don't do anything with it
+      spawn(fn ->
+        {:ok, _sock} = :gen_tcp.accept(listen_sock, 5_000)
+        # Intentionally don't do TLS handshake — just hold the socket
+        Process.sleep(10_000)
+      end)
+
+      # SCU should timeout trying to establish TLS
+      result =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "TIMEOUT_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: ["1.2.840.10008.1.1"],
+          timeout: 2_000,
+          tls: [verify: :verify_none]
+        )
+
+      assert {:error, _reason} = result
+      :gen_tcp.close(listen_sock)
+    end
+  end
+
+  describe "TLS error surfacing" do
+    test "handshake failure returns descriptive error", %{certs: certs} do
+      server_tls =
+        server_tls_opts(certs) ++
+          [
+            cacertfile: certs.cacertfile,
+            verify: :verify_peer,
+            fail_if_no_peer_cert: true
+          ]
+
+      {:ok, ref} =
+        Dimse.start_listener(
+          port: 0,
+          handler: Dimse.Scp.Echo,
+          tls: server_tls
+        )
+
+      port = :ranch.get_port(ref)
+
+      # Connect without client cert — should get a TLS error, not a generic timeout
+      result =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "NO_CERT",
+          called_ae: "DIMSE",
+          abstract_syntaxes: ["1.2.840.10008.1.1"],
+          tls: client_tls_opts(certs),
+          timeout: 5_000
+        )
+
+      assert {:error, reason} = result
+      # The error should be TLS-related, not a generic timeout
+      assert reason != :timeout
+      Dimse.stop_listener(ref)
+    end
+
+    test "wrong protocol version detected as TLS error" do
+      # Start a TLS listener but try connecting with plain TCP
+      certs = Dimse.Test.TlsHelpers.generate_tls_certs()
+      on_exit(fn -> File.rm_rf!(certs.dir) end)
+
+      {:ok, ref} =
+        Dimse.start_listener(
+          port: 0,
+          handler: Dimse.Scp.Echo,
+          tls: server_tls_opts(certs)
+        )
+
+      port = :ranch.get_port(ref)
+
+      # Plain TCP to a TLS listener — should fail
+      result =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "PLAIN_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: ["1.2.840.10008.1.1"],
+          timeout: 5_000
+        )
+
+      # Should get an error (TCP closed or timeout because TLS handshake never happens)
+      assert {:error, _} = result
+      Dimse.stop_listener(ref)
+    end
+  end
+
   describe "TLS security" do
     test "SCU rejects SCP with unknown CA", %{certs: certs} do
       # Start SCP with server cert

@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-03-18
+
+### Added
+
+- `Dimse.with_connection/4` — automatic connect/execute/release lifecycle
+- `Dimse.Error` module — error taxonomy with types for all 4 error categories
+- `Dimse.Tls` module — shared TLS option normalization
+- Expanded telemetry: 17 events across 6 categories (negotiation, TLS handshake, handler callbacks, sub-operations)
+- TLS hardening tests: hostname verification (SNI), handshake timeout, error surfacing, wrong-protocol detection
+- Interop test infrastructure with Docker harness (dcmtk, Orthanc, pynetdicom)
+- Protocol edge-case tests: 128 contexts, fragmentation boundaries, concurrent associations, ARTIM timer
+- `artim_timeout` option for `start_listener/1`
+
+### Changed
+
+- DRY: extracted `Dimse.Scu.put_if/3` (was `maybe_put/3` duplicated in store, n_get, n_create)
+- DRY: extracted `Dimse.Tls.normalize_opts/1` (was `normalize_tls_opt/1` duplicated in association, listener)
+- Implementation version bumped to `DIMSE_0.8.0`
+- Test count: 340 → 429 (10 properties + 419 tests), coverage 95.79% → 96%+
+
+### Removed
+
+- `docs/roadmap.md`
+
 ## [0.7.1] - 2026-03-18
 
 ### Added
@@ -197,7 +221,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Telemetry event definitions for association lifecycle and PDU I/O
 - CI workflow with Elixir 1.16/1.17/1.18 matrix
 
-[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.6.0...v0.6.1

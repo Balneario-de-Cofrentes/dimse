@@ -35,7 +35,9 @@ for fault isolation and natural backpressure.
 - **Presentation context negotiation** -- abstract syntax + transfer syntax matching
 - **TLS / DICOM Secure Transport** -- PS3.15 Annex B, mutual TLS via OTP `:ssl` + Ranch SSL
 - **Extended Negotiation (PS3.7 Annex D)** -- Role Selection, SOP Class Extended/Common Extended, User Identity authentication
-- **Telemetry** -- association lifecycle, PDU, and command metrics via `:telemetry`
+- **Automatic lifecycle** -- `Dimse.with_connection/4` for connect/execute/release in one call
+- **Error taxonomy** -- `Dimse.Error` with typed categories: transport, association, status, protocol
+- **Telemetry** -- 17 events across 6 categories (association, PDU, command, negotiation, TLS, handler) via `:telemetry`
 - **3 runtime deps** -- `dicom` + `ranch` + `telemetry`
 
 ## Installation
@@ -45,7 +47,7 @@ Add `dimse` to your `mix.exs` dependencies:
 ```elixir
 def deps do
   [
-    {:dimse, "~> 0.7"}
+    {:dimse, "~> 0.8"}
   ]
 end
 ```
@@ -111,6 +113,20 @@ end
 
 :ok = Dimse.echo(assoc)
 :ok = Dimse.release(assoc)
+```
+
+### Automatic Lifecycle (`with_connection/4`)
+
+```elixir
+{:ok, results} = Dimse.with_connection("192.168.1.10", 11112,
+  [calling_ae: "MY_SCU", called_ae: "REMOTE_SCP",
+   abstract_syntaxes: ["1.2.840.10008.5.1.4.1.2.2.1"]],
+  fn assoc ->
+    {:ok, results} = Dimse.find(assoc, :study, query_data)
+    results
+  end
+)
+# Association is released automatically (or aborted on error)
 ```
 
 ### C-STORE SCU (Client)
@@ -245,10 +261,23 @@ which requires concurrent in-flight request support — a future milestone.
 
 ## Testing
 
+429 tests (419 unit/integration + 10 property-based), 96%+ line coverage.
+
 ```bash
-mix test
-mix test --cover
-mix format --check-formatted
+mix test                          # Unit + integration tests
+mix test --cover                  # With HTML coverage report
+mix test --include interop        # Interop tests (requires Docker)
+mix format --check-formatted      # Check formatting
+```
+
+### Interop Tests
+
+Interop tests run against real DICOM implementations via Docker:
+
+```bash
+docker compose -f docker-compose.interop.yml up -d
+mix test --include interop
+docker compose -f docker-compose.interop.yml down
 ```
 
 ## Comparison

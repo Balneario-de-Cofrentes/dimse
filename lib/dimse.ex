@@ -343,6 +343,54 @@ defmodule Dimse do
     )
   end
 
+  @doc """
+  Opens an association, executes a function, and releases gracefully.
+
+  Handles the full connection lifecycle: connect, execute, release. If the
+  function raises or the association fails, the connection is aborted to
+  ensure cleanup.
+
+  ## Parameters
+
+    * `host` — remote hostname or IP
+    * `port` — remote port
+    * `opts` — connection options (same as `connect/3`)
+    * `fun` — function receiving the association pid
+
+  ## Examples
+
+      Dimse.with_connection("192.168.1.10", 11112, [calling_ae: "SCU"], fn assoc ->
+        :ok = Dimse.echo(assoc)
+        {:ok, results} = Dimse.find(assoc, :study, query)
+        results
+      end)
+
+  Returns `{:ok, fun_result}` or `{:error, reason}`.
+  """
+  @spec with_connection(String.t(), pos_integer(), keyword(), (pid() -> term())) ::
+          {:ok, term()} | {:error, term()}
+  def with_connection(host, port, opts, fun) when is_function(fun, 1) do
+    case connect(host, port, opts) do
+      {:ok, assoc} ->
+        try do
+          result = fun.(assoc)
+          release(assoc)
+          {:ok, result}
+        rescue
+          e ->
+            abort(assoc)
+            reraise e, __STACKTRACE__
+        catch
+          kind, reason ->
+            abort(assoc)
+            :erlang.raise(kind, reason, __STACKTRACE__)
+        end
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
   @doc "Sends an A-RELEASE-RQ to gracefully close the association."
   @spec release(pid(), timeout()) :: :ok | {:error, term()}
   def release(assoc, timeout \\ 30_000), do: Dimse.Scu.release(assoc, timeout)

@@ -16,13 +16,13 @@ defmodule Dimse.Association do
 
   use GenServer
 
-  alias Dimse.{Pdu, Command, Message, Telemetry}
+  alias Dimse.{Pdu, Command, Message, Telemetry, Tls}
   alias Dimse.Pdu.{Encoder, Decoder}
   alias Dimse.Association.{State, Config, Negotiation}
   alias Dimse.Command.Fields
 
   @implementation_uid "1.2.826.0.1.3680043.8.498.1"
-  @implementation_version "DIMSE_0.7.0"
+  @implementation_version "DIMSE_0.8.0"
 
   @default_transfer_syntaxes MapSet.new([
                                "1.2.840.10008.1.2",
@@ -202,7 +202,7 @@ defmodule Dimse.Association do
           {:gen_tcp, :gen_tcp, []}
 
         tls when is_list(tls) ->
-          ssl_opts = Enum.map(tls, &normalize_tls_opt/1)
+          ssl_opts = Tls.normalize_opts(tls)
           {:ssl, :ssl, ssl_opts}
       end
 
@@ -241,20 +241,23 @@ defmodule Dimse.Association do
           mode: :scu
         })
 
+        Telemetry.emit_event([:negotiation, :start], %{system_time: System.system_time()}, %{
+          association_id: state.association_id,
+          mode: :scu,
+          calling_ae: calling_ae,
+          called_ae: called_ae,
+          proposed_contexts_count: length(abstract_syntaxes)
+        })
+
+        # Emit TLS handshake event if connected over SSL
+        if transport == :ssl, do: emit_tls_handshake(socket, state.association_id)
+
         {:ok, new_state}
 
       {:error, reason} ->
         {:stop, reason}
     end
   end
-
-  # :ssl expects file paths as charlists
-  defp normalize_tls_opt({key, value})
-       when key in [:certfile, :keyfile, :cacertfile] and is_binary(value) do
-    {key, to_charlist(value)}
-  end
-
-  defp normalize_tls_opt(opt), do: opt
 
   @impl true
   def handle_call({:dimse_request, command_set, data}, from, %{phase: :established} = state) do
@@ -381,8 +384,16 @@ defmodule Dimse.Association do
   def handle_info({:sub_operation, :next}, %{sub_operation: sub_op} = state) do
     case sub_op.remaining do
       [] ->
-        # All sub-operations complete — send final response
+        # All sub-operations complete -- send final response
         send_sub_op_final_response(sub_op, state)
+
+        Telemetry.emit_event([:sub_operation, :stop], %{}, %{
+          association_id: state.association_id,
+          type: sub_op.type,
+          completed: sub_op.completed,
+          failed: sub_op.failed,
+          warning: sub_op.warning
+        })
 
         # Clean up sub-association for C-MOVE
         if sub_op.sub_assoc, do: Dimse.Scu.release(sub_op.sub_assoc, 5_000)
@@ -411,11 +422,12 @@ defmodule Dimse.Association do
             if context_id do
               pdus = Message.fragment(store_command, data, context_id, state.max_pdu_length)
               Enum.each(pdus, &send_pdu(state, &1))
-              # Wait for C-STORE-RSP — it will arrive via handle_response
+              # Wait for C-STORE-RSP -- it will arrive via handle_response
               {:noreply, %{state | sub_operation: updated_sub_op}}
             else
-              # No accepted context for this SOP class — count as failed
+              # No accepted context for this SOP class -- count as failed
               failed_sub_op = %{updated_sub_op | failed: updated_sub_op.failed + 1}
+              emit_sub_op_progress(failed_sub_op, state)
               send_sub_op_pending_response(failed_sub_op, state)
               Process.send(self(), {:sub_operation, :next}, [])
               {:noreply, %{state | sub_operation: failed_sub_op}}
@@ -434,12 +446,14 @@ defmodule Dimse.Association do
                  ) do
               :ok ->
                 completed_sub_op = %{updated_sub_op | completed: updated_sub_op.completed + 1}
+                emit_sub_op_progress(completed_sub_op, state)
                 send_sub_op_pending_response(completed_sub_op, state)
                 Process.send(self(), {:sub_operation, :next}, [])
                 {:noreply, %{state | sub_operation: completed_sub_op}}
 
               {:error, _reason} ->
                 failed_sub_op = %{updated_sub_op | failed: updated_sub_op.failed + 1}
+                emit_sub_op_progress(failed_sub_op, state)
                 send_sub_op_pending_response(failed_sub_op, state)
                 Process.send(self(), {:sub_operation, :next}, [])
                 {:noreply, %{state | sub_operation: failed_sub_op}}
@@ -504,8 +518,18 @@ defmodule Dimse.Association do
   end
 
   defp handle_pdu(%Pdu.AssociateRj{} = rj, %{phase: :negotiating} = state) do
+    proposed_count = map_size(state.proposed_contexts)
+
+    Telemetry.emit_event([:negotiation, :stop], %{duration: 0}, %{
+      association_id: state.association_id,
+      mode: :scu,
+      accepted_contexts_count: 0,
+      rejected_contexts_count: proposed_count,
+      result: :rejected
+    })
+
     if state.pending_request do
-      # SCU init is waiting — we use the init caller stored elsewhere
+      # SCU init is waiting -- we use the init caller stored elsewhere
     end
 
     {:stop, {:rejected, rj.result, rj.source, rj.reason}, state}
@@ -555,6 +579,17 @@ defmodule Dimse.Association do
   # --- Association negotiation (SCP) ---
 
   defp handle_associate_rq(rq, state) do
+    negotiation_start = System.monotonic_time(:millisecond)
+    proposed_count = length(rq.presentation_contexts)
+
+    Telemetry.emit_event([:negotiation, :start], %{system_time: System.system_time()}, %{
+      association_id: state.association_id,
+      mode: :scp,
+      calling_ae: rq.calling_ae_title,
+      called_ae: rq.called_ae_title,
+      proposed_contexts_count: proposed_count
+    })
+
     handler = state.handler
     supported_as = handler_abstract_syntaxes(handler)
     supported_ts = @default_transfer_syntaxes
@@ -562,8 +597,20 @@ defmodule Dimse.Association do
     {result_contexts, accepted_map} =
       Negotiation.negotiate(rq.presentation_contexts, supported_as, supported_ts)
 
+    rejected_count = proposed_count - map_size(accepted_map)
+
     if map_size(accepted_map) == 0 do
-      # Reject — no acceptable contexts
+      # Reject -- no acceptable contexts
+      negotiation_duration = System.monotonic_time(:millisecond) - negotiation_start
+
+      Telemetry.emit_event([:negotiation, :stop], %{duration: negotiation_duration}, %{
+        association_id: state.association_id,
+        mode: :scp,
+        accepted_contexts_count: 0,
+        rejected_contexts_count: rejected_count,
+        result: :rejected
+      })
+
       send_pdu(state, %Pdu.AssociateRj{result: 1, source: 1, reason: 1})
       {:stop, :no_accepted_contexts, state}
     else
@@ -594,6 +641,20 @@ defmodule Dimse.Association do
 
           send_pdu(state, ac)
 
+          negotiation_duration = System.monotonic_time(:millisecond) - negotiation_start
+
+          Telemetry.emit_event([:negotiation, :stop], %{duration: negotiation_duration}, %{
+            association_id: state.association_id,
+            mode: :scp,
+            accepted_contexts_count: map_size(accepted_map),
+            rejected_contexts_count: rejected_count,
+            result: :accepted
+          })
+
+          # Emit TLS handshake event if connected over SSL
+          if state.transport == :ranch_ssl,
+            do: emit_tls_handshake(state.socket, state.association_id)
+
           {:ok,
            %{
              state
@@ -607,6 +668,16 @@ defmodule Dimse.Association do
            }}
 
         {:error, _reason} ->
+          negotiation_duration = System.monotonic_time(:millisecond) - negotiation_start
+
+          Telemetry.emit_event([:negotiation, :stop], %{duration: negotiation_duration}, %{
+            association_id: state.association_id,
+            mode: :scp,
+            accepted_contexts_count: 0,
+            rejected_contexts_count: proposed_count,
+            result: :rejected
+          })
+
           send_pdu(state, %Pdu.AssociateRj{result: 1, source: 1, reason: 1})
           {:stop, :authentication_failed, state}
       end
@@ -624,6 +695,17 @@ defmodule Dimse.Association do
           into: %{} do
         {id, {sop_class_uid, ts}}
       end
+
+    proposed_count = map_size(state.proposed_contexts)
+    accepted_count = map_size(accepted)
+
+    Telemetry.emit_event([:negotiation, :stop], %{duration: 0}, %{
+      association_id: state.association_id,
+      mode: :scu,
+      accepted_contexts_count: accepted_count,
+      rejected_contexts_count: proposed_count - accepted_count,
+      result: if(accepted_count > 0, do: :accepted, else: :rejected)
+    })
 
     remote_max_pdu =
       case ac.user_information do
@@ -726,6 +808,7 @@ defmodule Dimse.Association do
         end
 
       # Send C-GET-RSP Pending with updated sub-op counts
+      emit_sub_op_progress(updated_sub_op, state)
       send_sub_op_pending_response(updated_sub_op, state)
 
       # Trigger next sub-operation
@@ -794,24 +877,30 @@ defmodule Dimse.Association do
       case command_field do
         0x0030 ->
           # C-ECHO-RQ
-          case handler.handle_echo(message.command, state) do
-            {:ok, status} -> {status, nil, %{}}
-            {:error, status, _msg} -> {status, nil, %{}}
-          end
+          invoke_handler(:handle_echo, command_field, state, fn ->
+            case handler.handle_echo(message.command, state) do
+              {:ok, status} -> {status, nil, %{}}
+              {:error, status, _msg} -> {status, nil, %{}}
+            end
+          end)
 
         0x0001 ->
           # C-STORE-RQ
-          case handler.handle_store(message.command, message.data, state) do
-            {:ok, status} -> {status, nil, %{}}
-            {:error, status, _msg} -> {status, nil, %{}}
-          end
+          invoke_handler(:handle_store, command_field, state, fn ->
+            case handler.handle_store(message.command, message.data, state) do
+              {:ok, status} -> {status, nil, %{}}
+              {:error, status, _msg} -> {status, nil, %{}}
+            end
+          end)
 
         0x0020 ->
           # C-FIND-RQ
-          case handler.handle_find(message.command, message.data, state) do
-            {:ok, results} -> send_find_results(results, message, state)
-            {:error, status, _msg} -> {status, nil, %{}}
-          end
+          invoke_handler(:handle_find, command_field, state, fn ->
+            case handler.handle_find(message.command, message.data, state) do
+              {:ok, results} -> send_find_results(results, message, state)
+              {:error, status, _msg} -> {status, nil, %{}}
+            end
+          end)
 
         0x0010 ->
           # C-GET-RQ
@@ -822,7 +911,7 @@ defmodule Dimse.Association do
           dispatch_move_request(handler, message, state)
 
         0x0FFF ->
-          # C-CANCEL-RQ (PS3.7 §9.3.2.3) — cancels a pending C-FIND/C-MOVE/C-GET.
+          # C-CANCEL-RQ (PS3.7 S9.3.2.3) -- cancels a pending C-FIND/C-MOVE/C-GET.
           # With synchronous handlers, if we're processing this, the operation
           # already completed. No separate response is sent for C-CANCEL.
           :no_response
@@ -964,13 +1053,21 @@ defmodule Dimse.Association do
   # --- C-GET SCP dispatch ---
 
   defp dispatch_get_request(handler, message, state) do
-    case handler.handle_get(message.command, message.data, state) do
+    case invoke_handler(:handle_get, 0x0010, state, fn ->
+           handler.handle_get(message.command, message.data, state)
+         end) do
       {:ok, []} ->
         {0x0000, nil, %{}}
 
       {:ok, instances} ->
         sop_class_uid = Command.affected_sop_class_uid(message.command) || ""
         message_id = Command.message_id(message.command) || 0
+
+        Telemetry.emit_event([:sub_operation, :start], %{system_time: System.system_time()}, %{
+          association_id: state.association_id,
+          type: :c_get,
+          total_instances: length(instances)
+        })
 
         sub_op = %{
           type: :c_get,
@@ -997,7 +1094,9 @@ defmodule Dimse.Association do
   defp dispatch_move_request(handler, message, state) do
     move_destination = Map.get(message.command, {0x0000, 0x0600}, "")
 
-    case handler.handle_move(message.command, message.data, state) do
+    case invoke_handler(:handle_move, 0x0021, state, fn ->
+           handler.handle_move(message.command, message.data, state)
+         end) do
       {:ok, []} ->
         {0x0000, nil, %{}}
 
@@ -1024,6 +1123,16 @@ defmodule Dimse.Association do
 
                 sop_class_uid = Command.affected_sop_class_uid(message.command) || ""
                 message_id = Command.message_id(message.command) || 0
+
+                Telemetry.emit_event(
+                  [:sub_operation, :start],
+                  %{system_time: System.system_time()},
+                  %{
+                    association_id: state.association_id,
+                    type: :c_move,
+                    total_instances: length(instances)
+                  }
+                )
 
                 sub_op = %{
                   type: :c_move,
@@ -1396,4 +1505,89 @@ defmodule Dimse.Association do
   end
 
   defp maybe_put_instance_uid(cmd, _command_field, _request_command), do: cmd
+
+  # --- Telemetry helpers ---
+
+  # Wraps a handler callback invocation with handler telemetry events.
+  defp invoke_handler(callback, command_field, state, fun) do
+    Telemetry.emit_event([:handler, :start], %{system_time: System.system_time()}, %{
+      association_id: state.association_id,
+      callback: callback,
+      command_field: command_field
+    })
+
+    handler_start = System.monotonic_time(:millisecond)
+
+    try do
+      result = fun.()
+      handler_duration = System.monotonic_time(:millisecond) - handler_start
+
+      status =
+        case result do
+          {s, _, _} when is_integer(s) -> s
+          _ -> 0x0000
+        end
+
+      Telemetry.emit_event([:handler, :stop], %{duration: handler_duration}, %{
+        association_id: state.association_id,
+        callback: callback,
+        status: status
+      })
+
+      result
+    rescue
+      e ->
+        handler_duration = System.monotonic_time(:millisecond) - handler_start
+
+        Telemetry.emit_event([:handler, :exception], %{duration: handler_duration}, %{
+          association_id: state.association_id,
+          callback: callback,
+          kind: :error,
+          reason: e
+        })
+
+        reraise e, __STACKTRACE__
+    catch
+      kind, reason ->
+        handler_duration = System.monotonic_time(:millisecond) - handler_start
+
+        Telemetry.emit_event([:handler, :exception], %{duration: handler_duration}, %{
+          association_id: state.association_id,
+          callback: callback,
+          kind: kind,
+          reason: reason
+        })
+
+        :erlang.raise(kind, reason, __STACKTRACE__)
+    end
+  end
+
+  # Emit sub-operation progress event.
+  defp emit_sub_op_progress(sub_op, state) do
+    Telemetry.emit_event([:sub_operation, :progress], %{}, %{
+      association_id: state.association_id,
+      type: sub_op.type,
+      completed: sub_op.completed,
+      failed: sub_op.failed,
+      remaining: length(sub_op.remaining)
+    })
+  end
+
+  # Emit TLS handshake event with connection information.
+  defp emit_tls_handshake(socket, association_id) do
+    {protocol_version, cipher_suite} =
+      case :ssl.connection_information(socket) do
+        {:ok, info} ->
+          {Keyword.get(info, :protocol), Keyword.get(info, :selected_cipher_suite)}
+
+        _ ->
+          {nil, nil}
+      end
+
+    Telemetry.emit_event([:tls, :handshake], %{}, %{
+      association_id: association_id,
+      protocol_version: protocol_version,
+      cipher_suite: cipher_suite
+    })
+  end
 end

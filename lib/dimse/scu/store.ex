@@ -58,8 +58,8 @@ defmodule Dimse.Scu.Store do
         {0x0000, 0x0800} => 0x0000,
         {0x0000, 0x1000} => sop_instance_uid
       }
-      |> maybe_put({0x0000, 0x0300}, Keyword.get(opts, :move_originator_ae))
-      |> maybe_put({0x0000, 0x1031}, Keyword.get(opts, :move_originator_message_id))
+      |> Dimse.Scu.put_if({0x0000, 0x0300}, Keyword.get(opts, :move_originator_ae))
+      |> Dimse.Scu.put_if({0x0000, 0x1031}, Keyword.get(opts, :move_originator_message_id))
 
     case Dimse.Association.request(assoc, command_set, data, timeout) do
       {:ok, response, _data} ->
@@ -72,7 +72,4 @@ defmodule Dimse.Scu.Store do
         err
     end
   end
-
-  defp maybe_put(map, _tag, nil), do: map
-  defp maybe_put(map, tag, value), do: Map.put(map, tag, value)
 end
