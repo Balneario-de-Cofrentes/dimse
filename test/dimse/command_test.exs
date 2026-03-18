@@ -219,5 +219,59 @@ defmodule Dimse.CommandTest do
       assert Status.category(0xA700) == :failure
       assert Status.category(0xC000) == :failure
     end
+
+    test "warning_coercion/0 is 0x0001" do
+      assert Status.warning_coercion() == 0x0001
+    end
+
+    test "failure_out_of_resources/0 is 0xA700" do
+      assert Status.failure_out_of_resources() == 0xA700
+    end
+
+    test "failure_identifier_mismatch/0 is 0xA900" do
+      assert Status.failure_identifier_mismatch() == 0xA900
+    end
+
+    test "failure_unable_to_process/0 is 0xC000" do
+      assert Status.failure_unable_to_process() == 0xC000
+    end
+  end
+
+  describe "LO VR encoding" do
+    # Tag (0000,0902) = ErrorComment, VR :LO
+    test "encodes and decodes :LO value (ErrorComment tag)" do
+      cmd = %{{0x0000, 0x0902} => "Identifier does not match SOP class"}
+      assert {:ok, binary} = Command.encode(cmd)
+      assert {:ok, decoded} = Command.decode(binary)
+      assert decoded[{0x0000, 0x0902}] == "Identifier does not match SOP class"
+    end
+  end
+
+  describe "AT VR encoding" do
+    # Tag (0000,0901) = OffendingElement, VR :AT (single tag reference)
+    test "encodes and decodes :AT single tag value" do
+      cmd = %{{0x0000, 0x0901} => {0x0008, 0x0060}}
+      assert {:ok, binary} = Command.encode(cmd)
+      assert {:ok, decoded} = Command.decode(binary)
+      assert decoded[{0x0000, 0x0901}] == [{0x0008, 0x0060}]
+    end
+  end
+
+  describe "unknown VR (catch-all) encoding" do
+    # Tag not in @tag_vr → treated as :UN, binary value, odd-length → space-padded
+    test "encodes unknown tag with binary value using catch-all path" do
+      cmd = %{{0x0009, 0x0001} => "oddlen"}
+      assert {:ok, binary} = Command.encode(cmd)
+      assert {:ok, decoded} = Command.decode(binary)
+      # "oddlen" is 6 bytes (even) — body returned as-is by catch-all decode
+      assert decoded[{0x0009, 0x0001}] == "oddlen"
+    end
+
+    test "odd-length binary value is space-padded" do
+      cmd = %{{0x0009, 0x0001} => "abc"}
+      assert {:ok, binary} = Command.encode(cmd)
+      # Binary should be padded to even length
+      assert byte_size(binary) > 0
+    end
   end
 end

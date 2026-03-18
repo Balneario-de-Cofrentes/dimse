@@ -9,23 +9,12 @@ defmodule Dimse.IntegrationTest do
   @study_root_move "1.2.840.10008.5.1.4.1.2.2.2"
 
   defp wait_for_established(assoc, timeout \\ 2_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    do_wait(assoc, deadline)
-  end
-
-  defp do_wait(assoc, deadline) do
-    if System.monotonic_time(:millisecond) > deadline do
-      flunk("Association did not reach :established within timeout")
-    end
-
     contexts = Dimse.Association.negotiated_contexts(assoc)
 
-    if map_size(contexts) > 0 do
-      :ok
-    else
-      Process.sleep(10)
-      do_wait(assoc, deadline)
-    end
+    assert map_size(contexts) > 0,
+           "Association was not established immediately after connect/3 within #{timeout}ms"
+
+    :ok
   end
 
   describe "C-ECHO end-to-end" do

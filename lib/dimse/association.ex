@@ -320,8 +320,13 @@ defmodule Dimse.Association do
   @impl true
   def handle_info({proto, socket, data}, %{socket: socket} = state)
       when proto in [:tcp, :ssl] do
-    # Accumulate buffer and process PDUs
-    buffer = state.pdu_buffer <> data
+    # Skip concatenation when buffer is empty (common case: one PDU per TCP segment)
+    buffer =
+      case state.pdu_buffer do
+        "" -> data
+        prev -> prev <> data
+      end
+
     new_state = %{state | bytes_received: state.bytes_received + byte_size(data)}
 
     case process_buffer(buffer, new_state) do

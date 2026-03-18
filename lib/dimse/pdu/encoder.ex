@@ -62,19 +62,18 @@ defmodule Dimse.Pdu.Encoder do
 
     user_info = encode_user_information(pdu.user_information)
 
-    payload =
-      IO.iodata_to_binary([
-        <<pdu.protocol_version || 1::16>>,
-        <<0::16>>,
-        pad_ae(pdu.called_ae_title || ""),
-        pad_ae(pdu.calling_ae_title || ""),
-        <<0::256>>,
-        app_context,
-        pres_contexts,
-        user_info
-      ])
+    # Keep as iodata — use iolist_size to avoid flattening twice
+    payload = [
+      <<pdu.protocol_version || 1::16, 0::16>>,
+      pad_ae(pdu.called_ae_title || ""),
+      pad_ae(pdu.calling_ae_title || ""),
+      <<0::256>>,
+      app_context,
+      pres_contexts,
+      user_info
+    ]
 
-    [<<@associate_rq, 0x00, byte_size(payload)::32>>, payload]
+    [<<@associate_rq, 0x00, :erlang.iolist_size(payload)::32>>, payload]
   end
 
   ## A-ASSOCIATE-AC (type 0x02) — PS3.8 Section 9.3.3
@@ -88,19 +87,17 @@ defmodule Dimse.Pdu.Encoder do
 
     user_info = encode_user_information(pdu.user_information)
 
-    payload =
-      IO.iodata_to_binary([
-        <<pdu.protocol_version || 1::16>>,
-        <<0::16>>,
-        pad_ae(pdu.called_ae_title || ""),
-        pad_ae(pdu.calling_ae_title || ""),
-        <<0::256>>,
-        app_context,
-        pres_contexts,
-        user_info
-      ])
+    payload = [
+      <<pdu.protocol_version || 1::16, 0::16>>,
+      pad_ae(pdu.called_ae_title || ""),
+      pad_ae(pdu.calling_ae_title || ""),
+      <<0::256>>,
+      app_context,
+      pres_contexts,
+      user_info
+    ]
 
-    [<<@associate_ac, 0x00, byte_size(payload)::32>>, payload]
+    [<<@associate_ac, 0x00, :erlang.iolist_size(payload)::32>>, payload]
   end
 
   ## A-ASSOCIATE-RJ (type 0x03) — PS3.8 Section 9.3.4
@@ -111,10 +108,15 @@ defmodule Dimse.Pdu.Encoder do
 
   ## P-DATA-TF (type 0x04) — PS3.8 Section 9.3.5
 
+  # Fast path for single PDV (most common case — avoids Enum.map list allocation)
+  defp encode_p_data_tf(%Pdu.PDataTf{pdv_items: [pdv]}) do
+    encoded = encode_pdv(pdv)
+    [<<@p_data_tf, 0x00, :erlang.iolist_size(encoded)::32>>, encoded]
+  end
+
   defp encode_p_data_tf(pdu) do
-    pdv_data = Enum.map(pdu.pdv_items || [], &encode_pdv/1)
-    payload = IO.iodata_to_binary(pdv_data)
-    [<<@p_data_tf, 0x00, byte_size(payload)::32>>, payload]
+    payload = Enum.map(pdu.pdv_items || [], &encode_pdv/1)
+    [<<@p_data_tf, 0x00, :erlang.iolist_size(payload)::32>>, payload]
   end
 
   defp encode_pdv(%Pdu.PresentationDataValue{} = pdv) do
@@ -157,13 +159,15 @@ defmodule Dimse.Pdu.Encoder do
 
   defp encode_presentation_context_rq(%Pdu.PresentationContext{} = pc) do
     abstract = encode_abstract_syntax(pc.abstract_syntax)
+    transfers = Enum.map(pc.transfer_syntaxes || [], &encode_transfer_syntax/1)
+    items = [abstract | transfers]
+    # 4 bytes fixed header (id, 3 reserved)
+    items_size = :erlang.iolist_size(items)
 
-    transfers =
-      Enum.map(pc.transfer_syntaxes || [], &encode_transfer_syntax/1)
-
-    items = IO.iodata_to_binary([abstract | transfers])
-    payload = <<pc.id::8, 0x00, 0x00, 0x00, items::binary>>
-    <<@presentation_context_rq_item, 0x00, byte_size(payload)::16, payload::binary>>
+    [
+      <<@presentation_context_rq_item, 0x00, items_size + 4::16, pc.id::8, 0x00, 0x00, 0x00>>,
+      items
+    ]
   end
 
   defp encode_presentation_context_ac(%Pdu.PresentationContext{} = pc) do
@@ -173,9 +177,13 @@ defmodule Dimse.Pdu.Encoder do
         _ -> <<>>
       end
 
-    items = IO.iodata_to_binary(transfer)
-    payload = <<pc.id::8, 0x00, pc.result || 0::8, 0x00, items::binary>>
-    <<@presentation_context_ac_item, 0x00, byte_size(payload)::16, payload::binary>>
+    transfer_size = :erlang.iolist_size(transfer)
+
+    [
+      <<@presentation_context_ac_item, 0x00, transfer_size + 4::16, pc.id::8, 0x00,
+        pc.result || 0::8, 0x00>>,
+      transfer
+    ]
   end
 
   defp encode_abstract_syntax(uid) do
@@ -191,14 +199,13 @@ defmodule Dimse.Pdu.Encoder do
   end
 
   defp encode_user_information(%Pdu.UserInformation{} = ui) do
-    items =
-      IO.iodata_to_binary([
-        encode_max_length(ui.max_pdu_length || 16_384),
-        encode_implementation_uid(ui.implementation_uid || "1.2.826.0.1.3680043.8.498.1"),
-        encode_implementation_version(ui.implementation_version)
-      ])
+    items = [
+      encode_max_length(ui.max_pdu_length || 16_384),
+      encode_implementation_uid(ui.implementation_uid || "1.2.826.0.1.3680043.8.498.1"),
+      encode_implementation_version(ui.implementation_version)
+    ]
 
-    <<@user_information_item, 0x00, byte_size(items)::16, items::binary>>
+    [<<@user_information_item, 0x00, :erlang.iolist_size(items)::16>>, items]
   end
 
   defp encode_max_length(length) do
@@ -217,10 +224,12 @@ defmodule Dimse.Pdu.Encoder do
 
   ## Helpers
 
+  # 16 space bytes used as padding source — binary_part avoids allocation
+  @spaces "                "
+
   @doc false
   def pad_ae(ae_title) when is_binary(ae_title) do
-    ae_title
-    |> String.slice(0, 16)
-    |> String.pad_trailing(16)
+    len = min(byte_size(ae_title), 16)
+    <<binary_part(ae_title, 0, len)::binary, binary_part(@spaces, 0, 16 - len)::binary>>
   end
 end

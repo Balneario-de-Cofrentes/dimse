@@ -49,6 +49,11 @@ defmodule Dimse.Pdu.DecoderTest do
       assert {:ok, %Pdu.Abort{source: 0, reason: 0}, <<>>} =
                Decoder.decode(PduHelpers.abort_binary(0, 0))
     end
+
+    test "decodes using PduHelpers.abort_binary default args" do
+      binary = PduHelpers.abort_binary()
+      assert {:ok, %Pdu.Abort{source: 0, reason: 0}, <<>>} = Decoder.decode(binary)
+    end
   end
 
   describe "decode/1 A-ASSOCIATE-RJ" do
@@ -60,6 +65,142 @@ defmodule Dimse.Pdu.DecoderTest do
     test "decodes transient rejection" do
       assert {:ok, %Pdu.AssociateRj{result: 2, source: 1, reason: 2}, <<>>} =
                Decoder.decode(PduHelpers.associate_rj_binary(2, 1, 2))
+    end
+
+    test "decodes using PduHelpers.associate_rj_binary default args" do
+      binary = PduHelpers.associate_rj_binary()
+
+      assert {:ok, %Pdu.AssociateRj{result: 1, source: 1, reason: 1}, <<>>} =
+               Decoder.decode(binary)
+    end
+  end
+
+  describe "decode/1 error paths" do
+    test "unknown PDU type returns error" do
+      binary = <<0xFF, 0x00, 4::32, 0::32>>
+      assert {:error, {:unknown_pdu_type, 0xFF}} = Decoder.decode(binary)
+    end
+
+    test "non-zero reserved byte returns malformed_pdu" do
+      # second byte is 0x01 instead of 0x00 — no clause matches
+      binary = <<0x01, 0x01, 0::40>>
+      assert {:error, :malformed_pdu} = Decoder.decode(binary)
+    end
+
+    test "A-ASSOCIATE-RQ with payload too short returns error" do
+      binary = <<0x01, 0x00, 5::32, 1, 2, 3, 4, 5>>
+      assert {:error, :malformed_associate_rq} = Decoder.decode(binary)
+    end
+
+    test "A-ASSOCIATE-AC with payload too short returns error" do
+      binary = <<0x02, 0x00, 5::32, 1, 2, 3, 4, 5>>
+      assert {:error, :malformed_associate_ac} = Decoder.decode(binary)
+    end
+
+    test "P-DATA-TF with malformed PDV items returns error" do
+      # pdv_length=2 means data_length=0, but payload is 2 bytes (context_id+flags only)
+      # feed a length that exceeds the remaining bytes to hit parse_pdv_items catch-all
+      binary = <<0x04, 0x00, 2::32, 0, 0>>
+      assert {:error, :malformed_pdv} = Decoder.decode(binary)
+    end
+
+    test "A-ASSOCIATE-RQ with malformed presentation context returns error" do
+      # Build valid fixed header (68 bytes) + a 0x20 PC item too short to parse
+      header =
+        <<1::16, 0::16>> <>
+          String.duplicate(" ", 16) <> String.duplicate(" ", 16) <> :binary.copy(<<0>>, 32)
+
+      bad_pc_item = <<0x20, 0x00, 3::16, 1, 2, 3>>
+      payload = header <> bad_pc_item
+      binary = <<0x01, 0x00, byte_size(payload)::32>> <> payload
+      assert {:error, :malformed_presentation_context} = Decoder.decode(binary)
+    end
+
+    test "A-ASSOCIATE-RQ with bad syntax item in presentation context returns error" do
+      header =
+        <<1::16, 0::16>> <>
+          String.duplicate(" ", 16) <> String.duplicate(" ", 16) <> :binary.copy(<<0>>, 32)
+
+      # PC: id=1, reserved x3, then a bad item type 0xAA
+      pc_content = <<1, 0, 0, 0, 0xAA, 0x00, 1::16, 0x01>>
+      pc_item = <<0x20, 0x00, byte_size(pc_content)::16>> <> pc_content
+      payload = header <> pc_item
+      binary = <<0x01, 0x00, byte_size(payload)::32>> <> payload
+      assert {:error, :malformed_syntax_items} = Decoder.decode(binary)
+    end
+
+    test "A-ASSOCIATE-RQ with unknown variable item type skips it and succeeds" do
+      # Valid 68-byte RQ header + unknown item type 0x99 with 0 bytes payload
+      header =
+        <<1::16, 0::16>> <>
+          String.duplicate(" ", 16) <> String.duplicate(" ", 16) <> :binary.copy(<<0>>, 32)
+
+      unknown_item = <<0x99, 0x00, 0::16>>
+      payload = header <> unknown_item
+      binary = <<0x01, 0x00, byte_size(payload)::32>> <> payload
+      assert {:ok, %Pdu.AssociateRq{}, <<>>} = Decoder.decode(binary)
+    end
+
+    test "A-ASSOCIATE-RQ with truncated variable items section returns malformed error" do
+      header =
+        <<1::16, 0::16>> <>
+          String.duplicate(" ", 16) <> String.duplicate(" ", 16) <> :binary.copy(<<0>>, 32)
+
+      # 1-byte tail that doesn't match any variable item pattern
+      bad_items = <<0xFF>>
+      payload = header <> bad_items
+      binary = <<0x01, 0x00, byte_size(payload)::32>> <> payload
+      assert {:error, :malformed_variable_items} = Decoder.decode(binary)
+    end
+
+    test "A-ASSOCIATE-RQ with 0x50 user info containing malformed data returns error" do
+      header =
+        <<1::16, 0::16>> <>
+          String.duplicate(" ", 16) <> String.duplicate(" ", 16) <> :binary.copy(<<0>>, 32)
+
+      # 0x50 user info with 1 byte that can't match any sub-item pattern
+      bad_ui = <<0x50, 0x00, 1::16, 0xFF>>
+      payload = header <> bad_ui
+      binary = <<0x01, 0x00, byte_size(payload)::32>> <> payload
+      assert {:error, :malformed_user_information} = Decoder.decode(binary)
+    end
+
+    test "A-ASSOCIATE-RQ with 0x50 user info containing unknown sub-item skips it" do
+      header =
+        <<1::16, 0::16>> <>
+          String.duplicate(" ", 16) <> String.duplicate(" ", 16) <> :binary.copy(<<0>>, 32)
+
+      # 0x50 user info with unknown sub-item type 0x99, 0 bytes of data
+      unknown_sub_item = <<0x99, 0x00, 0::16>>
+      ui_item = <<0x50, 0x00, byte_size(unknown_sub_item)::16>> <> unknown_sub_item
+      payload = header <> ui_item
+      binary = <<0x01, 0x00, byte_size(payload)::32>> <> payload
+      assert {:ok, %Pdu.AssociateRq{}, <<>>} = Decoder.decode(binary)
+    end
+
+    test "A-ASSOCIATE-AC with malformed 0x21 PC item returns error" do
+      # Valid AC header (68 bytes) + 0x21 item with only 2 bytes payload (need 4+)
+      header =
+        <<1::16, 0::16>> <>
+          String.duplicate(" ", 16) <> String.duplicate(" ", 16) <> :binary.copy(<<0>>, 32)
+
+      bad_pc_item = <<0x21, 0x00, 2::16, 1, 2>>
+      payload = header <> bad_pc_item
+      binary = <<0x02, 0x00, byte_size(payload)::32>> <> payload
+      assert {:error, :malformed_presentation_context} = Decoder.decode(binary)
+    end
+
+    test "A-ASSOCIATE-AC with 0x21 PC item containing bad syntax sub-items returns error" do
+      header =
+        <<1::16, 0::16>> <>
+          String.duplicate(" ", 16) <> String.duplicate(" ", 16) <> :binary.copy(<<0>>, 32)
+
+      # 0x21 AC item: valid 4-byte header (id=1, 0x00, result=0, 0x00) + unknown sub-item type
+      pc_content = <<1, 0, 0, 0, 0xBB, 0x00, 1::16, 0x01>>
+      pc_item = <<0x21, 0x00, byte_size(pc_content)::16>> <> pc_content
+      payload = header <> pc_item
+      binary = <<0x02, 0x00, byte_size(payload)::32>> <> payload
+      assert {:error, :malformed_syntax_items} = Decoder.decode(binary)
     end
   end
 
@@ -131,6 +272,55 @@ defmodule Dimse.Pdu.DecoderTest do
 
       {:ok, %Pdu.PDataTf{pdv_items: [pdv]}, _} = Decoder.decode(binary)
       assert pdv.is_command == false
+      assert pdv.is_last == false
+    end
+  end
+
+  describe "PduHelpers utility accessors" do
+    test "verification_uid/0 returns Verification SOP class UID" do
+      assert PduHelpers.verification_uid() == "1.2.840.10008.1.1"
+    end
+
+    test "implicit_vr_le/0 returns Implicit VR Little Endian UID" do
+      assert PduHelpers.implicit_vr_le() == "1.2.840.10008.1.2"
+    end
+
+    test "explicit_vr_le/0 returns Explicit VR Little Endian UID" do
+      assert PduHelpers.explicit_vr_le() == "1.2.840.10008.1.2.1"
+    end
+
+    test "pad_ae/1 pads to 16 bytes" do
+      assert byte_size(PduHelpers.pad_ae("SCP")) == 16
+    end
+
+    test "echo_rq_command/0 returns C-ECHO-RQ map" do
+      cmd = PduHelpers.echo_rq_command()
+      assert cmd[{0x0000, 0x0100}] == 0x0030
+    end
+
+    test "echo_rsp_command/0 returns C-ECHO-RSP map" do
+      cmd = PduHelpers.echo_rsp_command()
+      assert cmd[{0x0000, 0x0100}] == 0x8030
+    end
+
+    test "random_data_set/0 returns 1024 bytes by default" do
+      data = PduHelpers.random_data_set()
+      assert byte_size(data) == 1024
+    end
+
+    test "random_uid/0 generates a dotted numeric UID" do
+      uid = PduHelpers.random_uid()
+      assert String.starts_with?(uid, "1.2.826.0.1.")
+    end
+
+    test "p_data_binary with command=true, last=false produces 0x01 flags" do
+      binary =
+        PduHelpers.p_data_binary([
+          %{context_id: 1, is_command: true, is_last: false, data: <<1>>}
+        ])
+
+      assert {:ok, %Pdu.PDataTf{pdv_items: [pdv]}, <<>>} = Decoder.decode(binary)
+      assert pdv.is_command == true
       assert pdv.is_last == false
     end
   end

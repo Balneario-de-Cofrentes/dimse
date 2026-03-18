@@ -93,7 +93,7 @@ defmodule Dimse do
     * `:abstract_syntaxes` — list of SOP Class UIDs to propose
     * `:transfer_syntaxes` — list of Transfer Syntax UIDs to propose
     * `:max_pdu_length` — max PDU length (default: `16_384`)
-    * `:timeout` — connection timeout in ms (default: `30_000`)
+    * `:timeout` — total association establishment timeout in ms (default: `30_000`)
     * `:tls` — TLS options (keyword list). When present, the SCU connects
       via TLS instead of plain TCP. Accepts standard `:ssl` options such as
       `:cacertfile`, `:verify`, `:certfile`, and `:keyfile`.

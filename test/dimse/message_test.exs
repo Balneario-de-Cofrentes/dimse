@@ -168,6 +168,18 @@ defmodule Dimse.MessageTest do
 
       assert {:error, :unexpected_pdv} = Message.Assembler.feed(asm, data_pdv)
     end
+
+    test "returns error when command binary is corrupt" do
+      corrupt_pdv = %Pdu.PresentationDataValue{
+        context_id: 1,
+        is_command: true,
+        is_last: true,
+        data: <<0x01>>
+      }
+
+      asm = Message.Assembler.new()
+      assert {:error, {:command_decode_failed, _}} = Message.Assembler.feed(asm, corrupt_pdv)
+    end
   end
 
   describe "fragment/4" do

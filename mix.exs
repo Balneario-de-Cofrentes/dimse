@@ -1,7 +1,7 @@
 defmodule Dimse.MixProject do
   use Mix.Project
 
-  @version "0.6.0"
+  @version "0.6.1"
   @source_url "https://github.com/Balneario-de-Cofrentes/dimse"
 
   def project do
@@ -42,7 +42,8 @@ defmodule Dimse.MixProject do
 
       # Dev/test only
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
-      {:stream_data, "~> 1.0", only: [:test, :dev]}
+      {:stream_data, "~> 1.0", only: [:test, :dev]},
+      {:benchee, "~> 1.0", only: :dev, runtime: false}
     ]
   end
 

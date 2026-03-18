@@ -12,6 +12,17 @@ defmodule Dimse.Handler do
         @behaviour Dimse.Handler
 
         @impl true
+        def supported_abstract_syntaxes do
+          [
+            "1.2.840.10008.1.1",
+            "1.2.840.10008.5.1.4.1.1.2",
+            "1.2.840.10008.5.1.4.1.2.2.1",
+            "1.2.840.10008.5.1.4.1.2.2.2",
+            "1.2.840.10008.5.1.4.1.2.2.3"
+          ]
+        end
+
+        @impl true
         def handle_echo(_command, _state) do
           {:ok, 0x0000}
         end

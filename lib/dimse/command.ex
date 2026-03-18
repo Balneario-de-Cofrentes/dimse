@@ -78,17 +78,16 @@ defmodule Dimse.Command do
   @spec encode(map()) :: {:ok, binary()} | {:error, term()}
   def encode(command_set) when is_map(command_set) do
     # Encode all elements except CommandGroupLength, sorted by tag
-    elements_binary =
+    elements_iodata =
       command_set
       |> Map.delete({0x0000, 0x0000})
       |> Enum.sort()
       |> Enum.map(fn {tag, value} -> encode_element(tag, value) end)
-      |> IO.iodata_to_binary()
 
-    # Prepend CommandGroupLength
-    group_length_element = encode_element({0x0000, 0x0000}, byte_size(elements_binary))
+    # Use iolist_size to avoid flattening just for the length, then flatten once
+    group_length_element = encode_element({0x0000, 0x0000}, :erlang.iolist_size(elements_iodata))
 
-    {:ok, IO.iodata_to_binary([group_length_element, elements_binary])}
+    {:ok, IO.iodata_to_binary([group_length_element | elements_iodata])}
   end
 
   @doc """
@@ -147,21 +146,22 @@ defmodule Dimse.Command do
 
   ## Encoding
 
-  defp encode_element(tag, value) do
-    {group, element} = tag
-    vr = Map.get(@tag_vr, tag, :UN)
+  defp encode_element({group, element} = tag, value) do
+    vr = tag_vr(tag)
     encoded_value = encode_value(value, vr)
     padded = pad_to_even(encoded_value, vr)
-
-    [
-      <<group::16-little, element::16-little, byte_size(padded)::32-little>>,
-      padded
-    ]
+    [<<group::16-little, element::16-little, byte_size(padded)::32-little>>, padded]
   end
+
+  # Compile-time pattern-match dispatch — faster than Map.get at runtime
+  for {tag, vr} <- @tag_vr do
+    defp tag_vr(unquote(tag)), do: unquote(vr)
+  end
+
+  defp tag_vr(_), do: :UN
 
   defp encode_value(value, :US) when is_integer(value), do: <<value::16-little>>
   defp encode_value(value, :UL) when is_integer(value), do: <<value::32-little>>
-  defp encode_value(value, :SL) when is_integer(value), do: <<value::32-little-signed>>
   defp encode_value(value, :UI) when is_binary(value), do: value
   defp encode_value(value, :AE) when is_binary(value), do: value
   defp encode_value(value, :LO) when is_binary(value), do: value
@@ -194,8 +194,7 @@ defmodule Dimse.Command do
          acc
        ) do
     tag = {group, element}
-    vr = Map.get(@tag_vr, tag, :UN)
-    decoded = decode_value(value, vr)
+    decoded = decode_value(value, tag_vr(tag))
     decode_elements(rest, [{tag, decoded} | acc])
   end
 
@@ -203,7 +202,6 @@ defmodule Dimse.Command do
 
   defp decode_value(<<value::16-little>>, :US), do: value
   defp decode_value(<<value::32-little>>, :UL), do: value
-  defp decode_value(<<value::32-little-signed>>, :SL), do: value
 
   defp decode_value(value, :AT) when rem(byte_size(value), 4) == 0 do
     for <<g::16-little, e::16-little <- value>>, do: {g, e}

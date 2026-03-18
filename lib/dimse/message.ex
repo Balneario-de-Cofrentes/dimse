@@ -140,37 +140,49 @@ defmodule Dimse.Message do
     max_pdv_data = max_pdu_length - 12
 
     command_pdus = fragment_pdvs(command_binary, context_id, true, max_pdv_data)
-    data_pdus = if data, do: fragment_pdvs(data, context_id, false, max_pdv_data), else: []
 
-    Enum.map(command_pdus ++ data_pdus, fn pdvs ->
-      %Pdu.PDataTf{pdv_items: pdvs}
-    end)
+    if data do
+      command_pdus ++ fragment_pdvs(data, context_id, false, max_pdv_data)
+    else
+      command_pdus
+    end
   end
 
+  # Builds PDataTf structs directly — no intermediate [pdv] list or wrapping Enum.map
   defp fragment_pdvs(binary, context_id, is_command, max_pdv_data) do
-    chunks = chunk_binary(binary, max_pdv_data)
-    last_idx = length(chunks) - 1
+    do_fragment_pdvs(binary, context_id, is_command, max_pdv_data, [])
+  end
 
-    chunks
-    |> Enum.with_index()
-    |> Enum.map(fn {chunk, idx} ->
-      [
+  defp do_fragment_pdvs(binary, context_id, is_command, max, acc)
+       when byte_size(binary) <= max do
+    pdu = %Pdu.PDataTf{
+      pdv_items: [
         %Pdu.PresentationDataValue{
           context_id: context_id,
           is_command: is_command,
-          is_last: idx == last_idx,
+          is_last: true,
+          data: binary
+        }
+      ]
+    }
+
+    Enum.reverse([pdu | acc])
+  end
+
+  defp do_fragment_pdvs(binary, context_id, is_command, max, acc) do
+    <<chunk::binary-size(max), rest::binary>> = binary
+
+    pdu = %Pdu.PDataTf{
+      pdv_items: [
+        %Pdu.PresentationDataValue{
+          context_id: context_id,
+          is_command: is_command,
+          is_last: false,
           data: chunk
         }
       ]
-    end)
-  end
+    }
 
-  defp chunk_binary(<<>>, _max), do: [<<>>]
-
-  defp chunk_binary(binary, max) when byte_size(binary) <= max, do: [binary]
-
-  defp chunk_binary(binary, max) do
-    <<chunk::binary-size(max), rest::binary>> = binary
-    [chunk | chunk_binary(rest, max)]
+    do_fragment_pdvs(rest, context_id, is_command, max, [pdu | acc])
   end
 end

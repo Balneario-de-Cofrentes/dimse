@@ -90,6 +90,19 @@ defmodule Dimse.Pdu.EncoderTest do
   end
 
   describe "encode/1 A-ASSOCIATE-AC" do
+    test "encodes rejected presentation context (nil transfer_syntaxes) as empty" do
+      ac = %Pdu.AssociateAc{
+        called_ae_title: "SCP",
+        calling_ae_title: "SCU",
+        presentation_contexts: [
+          %Pdu.PresentationContext{id: 1, result: 3, transfer_syntaxes: nil}
+        ]
+      }
+
+      binary = IO.iodata_to_binary(Encoder.encode(ac))
+      assert byte_size(binary) > 0
+    end
+
     test "starts with PDU type 0x02" do
       ac = %Pdu.AssociateAc{
         protocol_version: 1,

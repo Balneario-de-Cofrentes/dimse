@@ -15,23 +15,12 @@ defmodule Dimse.TlsTest do
   end
 
   defp wait_for_established(assoc, timeout \\ 2_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    do_wait(assoc, deadline)
-  end
-
-  defp do_wait(assoc, deadline) do
-    if System.monotonic_time(:millisecond) > deadline do
-      flunk("Association did not reach :established within timeout")
-    end
-
     contexts = Dimse.Association.negotiated_contexts(assoc)
 
-    if map_size(contexts) > 0 do
-      :ok
-    else
-      Process.sleep(10)
-      do_wait(assoc, deadline)
-    end
+    assert map_size(contexts) > 0,
+           "Association was not established immediately after connect/3 within #{timeout}ms"
+
+    :ok
   end
 
   defp server_tls_opts(certs) do
@@ -288,16 +277,7 @@ defmodule Dimse.TlsTest do
           tls: client_tls_opts(certs)
         )
 
-      # Should fail — either connection error or the association dies soon after
-      case result do
-        {:error, _reason} ->
-          :ok
-
-        {:ok, assoc} ->
-          # The association may start but will be killed when the SCP rejects
-          Process.sleep(100)
-          refute Process.alive?(assoc)
-      end
+      assert {:error, _reason} = result
 
       Dimse.stop_listener(ref)
     end

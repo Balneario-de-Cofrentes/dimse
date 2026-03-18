@@ -5,7 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.1] - 2026-03-18
+
+### Added
+
+- `bench/` directory with five Benchee suites: PDU encode/decode, command encode/decode, message fragmentation/assembly, persistent-connection throughput, and end-to-end round-trip benchmarks
+- `benchee` dev dependency for the benchmark suites
+
+### Changed
+
+- `Dimse.connect/3` and `Dimse.Scu.open/3` now enforce a single timeout budget across socket connect plus association negotiation
+- PDU encoder keeps iodata throughout — no intermediate `IO.iodata_to_binary` flatten; sizes computed via `:erlang.iolist_size/1`
+- PDU encoder fast-path for single-PDV `P-DATA-TF` (the common case) avoids `Enum.map` list allocation
+- PDU decoder accumulates presentation contexts with `[h | t]` + `Enum.reverse/1` instead of `++ [item]` (O(n) vs O(n²))
+- Command encoder uses compile-time pattern-match dispatch for VR lookup instead of `Map.get/3` at runtime
+- Message fragmentation rewritten as a tail-recursive accumulator — no intermediate chunk lists, direct struct construction
+- `Association` TCP receive handler skips binary concatenation when the buffer is already empty (common case: one PDU per segment)
+
+### Fixed
+
+- SCP examples now declare `supported_abstract_syntaxes/0` for the non-Verification services they advertise
+- TLS failure-path tests now require synchronous `connect/3` failure instead of tolerating the old async-connect behavior
 
 ## [0.6.0] - 2026-03-18
 
@@ -140,7 +160,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Telemetry event definitions for association lifecycle and PDU I/O
 - CI workflow with Elixir 1.16/1.17/1.18 matrix
 
-[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.5.1...v0.6.0
+[0.5.1]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.3.0...v0.4.1
 [0.3.0]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.2.0...v0.3.0

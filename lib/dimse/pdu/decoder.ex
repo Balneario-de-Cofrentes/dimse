@@ -144,7 +144,10 @@ defmodule Dimse.Pdu.Decoder do
   ## Variable items parser (for A-ASSOCIATE-RQ/AC)
 
   defp parse_variable_items(data) do
-    parse_variable_items(data, %{presentation_contexts: []})
+    case parse_variable_items(data, %{presentation_contexts: []}) do
+      {:ok, acc} -> {:ok, Map.update!(acc, :presentation_contexts, &Enum.reverse/1)}
+      err -> err
+    end
   end
 
   defp parse_variable_items(<<>>, acc), do: {:ok, acc}
@@ -164,8 +167,7 @@ defmodule Dimse.Pdu.Decoder do
        ) do
     case parse_presentation_context_rq(item_data) do
       {:ok, pc} ->
-        contexts = acc[:presentation_contexts] ++ [pc]
-        parse_variable_items(rest, Map.put(acc, :presentation_contexts, contexts))
+        parse_variable_items(rest, Map.update!(acc, :presentation_contexts, &[pc | &1]))
 
       {:error, _} = err ->
         err
@@ -179,8 +181,7 @@ defmodule Dimse.Pdu.Decoder do
        ) do
     case parse_presentation_context_ac(item_data) do
       {:ok, pc} ->
-        contexts = acc[:presentation_contexts] ++ [pc]
-        parse_variable_items(rest, Map.put(acc, :presentation_contexts, contexts))
+        parse_variable_items(rest, Map.update!(acc, :presentation_contexts, &[pc | &1]))
 
       {:error, _} = err ->
         err
@@ -241,7 +242,12 @@ defmodule Dimse.Pdu.Decoder do
 
   defp parse_presentation_context_ac(_), do: {:error, :malformed_presentation_context}
 
-  defp parse_syntax_items(data), do: parse_syntax_items(data, nil, [])
+  defp parse_syntax_items(data) do
+    case parse_syntax_items(data, nil, []) do
+      {:ok, abstract, transfers} -> {:ok, abstract, Enum.reverse(transfers)}
+      err -> err
+    end
+  end
 
   defp parse_syntax_items(<<>>, abstract, transfers), do: {:ok, abstract, transfers}
 
@@ -260,7 +266,7 @@ defmodule Dimse.Pdu.Decoder do
          abstract,
          transfers
        ) do
-    parse_syntax_items(rest, abstract, transfers ++ [uid])
+    parse_syntax_items(rest, abstract, [uid | transfers])
   end
 
   defp parse_syntax_items(_, _, _), do: {:error, :malformed_syntax_items}

@@ -31,7 +31,7 @@ defmodule Dimse.Scu do
 
   - Connection refused → `{:error, :econnrefused}`
   - Association rejected → `{:error, {:rejected, result, source, reason}}`
-  - Timeout → `{:error, :timeout}`
+  - Association establishment timeout → `{:error, :timeout}`
   - Unexpected abort → `{:error, {:aborted, source, reason}}`
   """
 
@@ -49,7 +49,7 @@ defmodule Dimse.Scu do
     * `:abstract_syntaxes` — list of SOP Class UIDs (default: Verification)
     * `:transfer_syntaxes` — list of Transfer Syntax UIDs
     * `:max_pdu_length` — max PDU length (default: `16_384`)
-    * `:timeout` — connection timeout in ms (default: `30_000`)
+    * `:timeout` — total association establishment timeout in ms (default: `30_000`)
     * `:tls` — TLS options (keyword list). When present, the SCU connects
       via TLS instead of plain TCP. Accepts standard `:ssl` options:
       - `:cacertfile` — path to CA certificate for server verification
@@ -61,6 +61,7 @@ defmodule Dimse.Scu do
   def open(host, port, opts \\ []) do
     abstract_syntaxes = Keyword.get(opts, :abstract_syntaxes, [@verification_uid])
     timeout = Keyword.get(opts, :timeout, 30_000)
+    started_at = System.monotonic_time(:millisecond)
 
     config = %Dimse.Association.Config{
       ae_title: Keyword.get(opts, :calling_ae, "DIMSE"),
@@ -83,9 +84,22 @@ defmodule Dimse.Scu do
       |> maybe_add(:tls, Keyword.get(opts, :tls))
 
     # Use start (not start_link) so connection failures don't crash the caller
-    with {:ok, pid} <- Dimse.Association.start(assoc_opts),
-         :ok <- await_established(pid, timeout) do
-      {:ok, pid}
+    case Dimse.Association.start(assoc_opts) do
+      {:ok, pid} ->
+        case remaining_timeout(started_at, timeout) do
+          remaining when remaining > 0 ->
+            case await_established(pid, remaining) do
+              :ok -> {:ok, pid}
+              {:error, _} = err -> err
+            end
+
+          _ ->
+            Dimse.Association.abort(pid)
+            {:error, :timeout}
+        end
+
+      {:error, _} = err ->
+        err
     end
   end
 
@@ -129,6 +143,11 @@ defmodule Dimse.Scu do
     do_await_established(pid, ref, deadline)
   end
 
+  defp remaining_timeout(started_at, timeout) do
+    elapsed = System.monotonic_time(:millisecond) - started_at
+    max(timeout - elapsed, 0)
+  end
+
   defp do_await_established(pid, ref, deadline) do
     receive do
       {:DOWN, ^ref, :process, ^pid, reason} ->
@@ -151,22 +170,24 @@ defmodule Dimse.Scu do
         end
     end
   catch
-    :exit, {:noproc, _} ->
-      wait_for_down(pid, ref)
-
-    :exit, {:normal, _} ->
-      wait_for_down(pid, ref)
+    :exit, reason ->
+      wait_for_down(pid, ref, normalize_connect_call_exit(reason))
   end
 
-  defp wait_for_down(pid, ref) do
+  defp wait_for_down(pid, ref, fallback) do
     receive do
       {:DOWN, ^ref, :process, ^pid, reason} ->
         {:error, normalize_connect_exit(reason)}
     after
       0 ->
-        {:error, :closed}
+        {:error, fallback}
     end
   end
+
+  defp normalize_connect_call_exit({:noproc, _}), do: :closed
+  defp normalize_connect_call_exit({:normal, _}), do: :closed
+  defp normalize_connect_call_exit({:shutdown, reason}), do: normalize_connect_exit(reason)
+  defp normalize_connect_call_exit(reason), do: normalize_connect_exit(reason)
 
   defp normalize_connect_exit({:rejected, result, source, reason}),
     do: {:rejected, result, source, reason}
