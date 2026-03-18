@@ -36,7 +36,7 @@ Add `dimse` to your `mix.exs` dependencies:
 ```elixir
 def deps do
   [
-    {:dimse, "~> 0.5.0"}
+    {:dimse, "~> 0.5.1"}
   ]
 end
 ```
@@ -243,12 +243,9 @@ lib/dimse/
 
 ## DICOM Standard Coverage
 
-| Part | Title | Coverage |
-|------|-------|----------|
-| PS3.7 | DIMSE Service and Protocol | DIMSE-C (Ch.9) + DIMSE-N (Ch.10), command set encoding, command fields, status codes |
-| PS3.8 | Network Communication Support | Upper Layer PDUs (all 7 types), association state machine, presentation context negotiation |
+### Services -- 11/11
 
-### DIMSE Services
+All DIMSE-C (PS3.7 Ch.9) and DIMSE-N (PS3.7 Ch.10) services, both SCP and SCU:
 
 | Service | SCP | SCU | Description |
 |---------|-----|-----|-------------|
@@ -264,7 +261,33 @@ lib/dimse/
 | N-CREATE | Yes | Yes | Create managed SOP Instance |
 | N-DELETE | Yes | Yes | Delete managed SOP Instance |
 
+### Upper Layer Protocol (PS3.8)
+
+| Component | Status |
+|-----------|--------|
+| All 7 PDU types | Complete |
+| Association state machine (5-phase + ARTIM) | Complete |
+| Presentation context negotiation | Complete |
+| Max PDU length negotiation + fragmentation | Complete |
+| Implementation Class UID / Version Name | Complete |
+| Command set encoding (Implicit VR LE, PS3.7 6.3.1) | Complete |
+| Status code handling (success/warning/failure/cancel/pending) | Complete |
+| Sub-operation tracking (C-MOVE/C-GET remaining/completed/failed/warning) | Complete |
+| C-CANCEL support | Complete |
+
+### Not Yet Implemented
+
+| Feature | Priority | Notes |
+|---------|----------|-------|
+| TLS (PS3.15 Annex B) | High | OTP `:ssl` + Ranch SSL transport |
+| SOP Class Extended Negotiation (0x56) | Medium | Role selection for SOP classes |
+| SOP Class Common Extended Negotiation (0x57) | Medium | Service class-wide negotiation |
+| User Identity Negotiation (0x58/0x59) | Medium | Username/password/Kerberos |
+| Asynchronous Operations Window (0x53) | Low | Multi-message pipelining |
+
 ## Testing
+
+195 tests + 10 property-based tests, 0 failures.
 
 ```bash
 mix test              # Run all tests
@@ -274,10 +297,45 @@ mix format --check-formatted
 
 Property-based tests using [StreamData](https://hex.pm/packages/stream_data)
 verify PDU encode/decode roundtrips. Integration tests verify all 11 DIMSE
-services (C-ECHO, C-STORE, C-FIND, C-MOVE, C-GET, N-GET, N-SET, N-ACTION,
-N-CREATE, N-DELETE, N-EVENT-REPORT) SCP/SCU interoperability over TCP.
+services end-to-end over TCP.
 
-## Project Positioning
+## Competitive Analysis
+
+`dimse` is one of only 5 libraries in any language that implements all 11 DIMSE
+services with both SCP and SCU roles. The others are DCMTK (C++), dcm4che (Java),
+pynetdicom (Python), and fo-dicom (C#/.NET).
+
+### Cross-Language Comparison
+
+| Feature | dimse | [DCMTK](https://github.com/DCMTK/dcmtk) | [dcm4che](https://github.com/dcm4che/dcm4che) | [pynetdicom](https://github.com/pydicom/pynetdicom) | [fo-dicom](https://github.com/fo-dicom/fo-dicom) | [dicom-rs](https://github.com/Enet4/dicom-rs) |
+|---------|-------|-------|---------|------------|----------|----------|
+| Language | Elixir | C++ | Java | Python | C#/.NET | Rust |
+| License | MIT | BSD-3 | MPL-1.1 | MIT | MS-PL | MIT/Apache |
+| DIMSE-C services | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 | 2/5 |
+| DIMSE-N services | 6/6 | 6/6 | 6/6 | 6/6 | 6/6 | 0/6 |
+| SCP + SCU | Both | Both | Both | Both | Both | SCU only |
+| TLS | No | Yes | Yes | Yes | Yes | No |
+| Extended negotiation | No | Yes | Yes | Yes | Yes | No |
+| Async ops window | No | Yes | Partial | Negotiation only | Yes | No |
+| Telemetry | `:telemetry` | Logging | Logging | Events | Events | -- |
+| Concurrency model | GenServer/OTP | Threads | Threads | Threads | async/await | -- |
+| Runtime deps | 3 | Many | JDK | pydicom | .NET | Minimal |
+
+### BEAM Ecosystem
+
+| Feature | dimse | [wolfpacs](https://github.com/wolfpacs/wolfpacs) | [dicom.ex](https://github.com/jjedele/dicom.ex) |
+|---------|-------|----------|----------|
+| Language | Elixir | Erlang | Elixir |
+| License | MIT | AGPL-3.0 | Apache-2.0 |
+| DIMSE-C services | 5/5 (SCP+SCU) | 2/5 (C-ECHO, C-STORE) | 2.5/5 (SCP only) |
+| DIMSE-N services | 6/6 (SCP+SCU) | 0/6 | 0/6 |
+| All 7 PDU types | Yes | 6/7 | 6/7 |
+| ARTIM timer | Yes | No | No |
+| SCU client API | Full | Partial | None |
+| Tests | 205 (195 + 10 prop) | ~81 | ~25 |
+| Status | Active | Sporadic | Inactive |
+
+### Ecosystem Positioning
 
 `dimse` is the networking counterpart to [`dicom`](https://hex.pm/packages/dicom),
 which handles DICOM P10 file parsing and writing. Together they provide a complete
@@ -287,28 +345,6 @@ pure-Elixir DICOM toolkit:
 |---------|-------|-------------|
 | [`dicom`](https://hex.pm/packages/dicom) | P10 files, data sets, DICOM JSON | PS3.5, PS3.6, PS3.10, PS3.18 |
 | `dimse` | DIMSE networking, SCP/SCU | PS3.7, PS3.8 |
-
-### Comparison with Existing Libraries
-
-| Feature | dimse | [wolfpacs](https://github.com/wolfpacs/wolfpacs) | [dicom.ex](https://github.com/jjedele/dicom.ex) |
-|---------|-------|----------|----------|
-| Language | Elixir | Erlang | Elixir |
-| PDU decode/encode | All 7 types | 6/7 (no A-ASSOCIATE-RJ) | 6/7 (no A-ABORT) |
-| Association state machine | 5-phase + ARTIM timer | gen_statem (2 states) | GenServer (4 states) |
-| DIMSE-C services | C-ECHO, C-STORE, C-FIND, C-MOVE, C-GET | C-ECHO, C-STORE | C-ECHO, C-STORE, partial C-FIND |
-| DIMSE-N services | All 6 (N-GET, N-SET, N-ACTION, N-CREATE, N-DELETE, N-EVENT-REPORT) | None | None |
-| SCP behaviour | `@behaviour` with 11 callbacks (5 DIMSE-C + 6 DIMSE-N) | Hardcoded routing | Event handler callbacks |
-| SCU client | Full API (open/release/abort/echo) | gen_statem sender | No SCU |
-| Max PDU fragmentation | Yes (encode + reassembly) | Yes (sender chunking) | Parsed, not enforced |
-| ARTIM timer | PS3.8 compliant (30s default) | No | No |
-| Telemetry | 6 event types | Logger only | Logger only |
-| Transfer syntaxes | IVR LE, EVR LE | 3 uncompressed | 13 registered (3 decoded) |
-| Property tests | StreamData (10 properties) | proper (extensive) | No |
-| Tests | 202 (192 tests + 10 properties) | ~81 eunit + proper | ~25 |
-| Runtime deps | 3 (dicom, ranch, telemetry) | 2 (ranch, recon) | 0 (stdlib only) |
-| Source LOC | ~2,700 | ~14,500 | ~2,600 (+ 26K tag dict) |
-| Maintained | Active | Active | Active |
-| License | MIT | AGPL-3.0 | Apache-2.0 |
 
 ## AI-Assisted Development
 
