@@ -722,6 +722,290 @@ defmodule Dimse.IntegrationTest do
     end
   end
 
+  # --- DIMSE-N Services ---
+
+  @storage_commitment_push "1.2.840.10008.1.20.1"
+  @test_n_sop_class "1.2.840.10008.5.1.4.34.6.1"
+
+  describe "N-GET end-to-end" do
+    test "SCU receives attribute data from SCP" do
+      test_pid = self()
+      attr_data = :crypto.strong_rand_bytes(64)
+      handler = n_get_handler(test_pid, attr_data)
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "NGET_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@test_n_sop_class]
+        )
+
+      wait_for_established(assoc)
+
+      assert {:ok, 0x0000, ^attr_data} =
+               Dimse.n_get(assoc, @test_n_sop_class, "1.2.3.4.5", timeout: 5_000)
+
+      assert_receive {:n_get_called, _command}, 2_000
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+  end
+
+  describe "N-SET end-to-end" do
+    test "SCU sends modifications and receives updated data" do
+      test_pid = self()
+      mod_data = :crypto.strong_rand_bytes(48)
+      response_data = :crypto.strong_rand_bytes(64)
+      handler = n_set_handler(test_pid, response_data)
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "NSET_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@test_n_sop_class]
+        )
+
+      wait_for_established(assoc)
+
+      assert {:ok, 0x0000, ^response_data} =
+               Dimse.n_set(assoc, @test_n_sop_class, "1.2.3.4.5", mod_data, timeout: 5_000)
+
+      assert_receive {:n_set_called, ^mod_data}, 2_000
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+  end
+
+  describe "N-ACTION end-to-end" do
+    test "SCU sends action and receives reply" do
+      test_pid = self()
+      action_data = :crypto.strong_rand_bytes(32)
+      reply_data = :crypto.strong_rand_bytes(48)
+      handler = n_action_handler(test_pid, reply_data)
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "NACTION_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@test_n_sop_class]
+        )
+
+      wait_for_established(assoc)
+
+      assert {:ok, 0x0000, ^reply_data} =
+               Dimse.n_action(assoc, @test_n_sop_class, "1.2.3.4.5", 1, action_data,
+                 timeout: 5_000
+               )
+
+      assert_receive {:n_action_called, ^action_data}, 2_000
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+  end
+
+  describe "N-CREATE end-to-end" do
+    test "SCU creates and receives created data" do
+      test_pid = self()
+      create_data = :crypto.strong_rand_bytes(64)
+      response_data = :crypto.strong_rand_bytes(96)
+      handler = n_create_handler(test_pid, response_data)
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "NCREATE_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@test_n_sop_class]
+        )
+
+      wait_for_established(assoc)
+
+      assert {:ok, 0x0000, ^response_data} =
+               Dimse.n_create(assoc, @test_n_sop_class, create_data, timeout: 5_000)
+
+      assert_receive {:n_create_called, ^create_data}, 2_000
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+  end
+
+  describe "N-DELETE end-to-end" do
+    test "SCU deletes and receives confirmation" do
+      test_pid = self()
+      handler = n_delete_handler(test_pid)
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "NDELETE_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@test_n_sop_class]
+        )
+
+      wait_for_established(assoc)
+
+      assert {:ok, 0x0000, nil} =
+               Dimse.n_delete(assoc, @test_n_sop_class, "1.2.3.4.5", timeout: 5_000)
+
+      assert_receive {:n_delete_called, _command}, 2_000
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+  end
+
+  describe "N-EVENT-REPORT end-to-end" do
+    test "SCU sends event and receives acknowledgment" do
+      test_pid = self()
+      event_data = :crypto.strong_rand_bytes(48)
+      handler = n_event_report_handler(test_pid)
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "NEVENT_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@test_n_sop_class]
+        )
+
+      wait_for_established(assoc)
+
+      assert {:ok, 0x0000, nil} =
+               Dimse.n_event_report(assoc, @test_n_sop_class, "1.2.3.4.5", 1, event_data,
+                 timeout: 5_000
+               )
+
+      assert_receive {:n_event_report_called, ^event_data}, 2_000
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+  end
+
+  describe "DIMSE-N error handling" do
+    test "unimplemented handler returns 0x0112 (No Such SOP Class)" do
+      handler = n_error_handler()
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "NERR_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@test_n_sop_class]
+        )
+
+      wait_for_established(assoc)
+
+      assert {:ok, 0x0112, nil} =
+               Dimse.n_get(assoc, @test_n_sop_class, "1.2.3.4.5", timeout: 5_000)
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+  end
+
+  describe "Mixed DIMSE-C and DIMSE-N" do
+    test "echo + N-GET on same association" do
+      test_pid = self()
+      attr_data = :crypto.strong_rand_bytes(32)
+      handler = n_get_echo_handler(test_pid, attr_data)
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "MIX_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: ["1.2.840.10008.1.1", @test_n_sop_class]
+        )
+
+      wait_for_established(assoc)
+
+      assert :ok = Dimse.echo(assoc, timeout: 5_000)
+
+      assert {:ok, 0x0000, ^attr_data} =
+               Dimse.n_get(assoc, @test_n_sop_class, "1.2.3.4.5", timeout: 5_000)
+
+      assert :ok = Dimse.echo(assoc, timeout: 5_000)
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+  end
+
+  describe "Storage Commitment flow" do
+    test "N-ACTION request followed by N-EVENT-REPORT on separate association" do
+      test_pid = self()
+      action_data = :crypto.strong_rand_bytes(32)
+      event_data = :crypto.strong_rand_bytes(48)
+      handler = storage_commitment_handler(test_pid)
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      # First association: N-ACTION (commitment request)
+      {:ok, assoc1} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "SC_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@storage_commitment_push]
+        )
+
+      wait_for_established(assoc1)
+
+      assert {:ok, 0x0000, nil} =
+               Dimse.n_action(assoc1, @storage_commitment_push, "1.2.3.4.5", 1, action_data,
+                 timeout: 5_000
+               )
+
+      assert_receive {:commitment_requested, ^action_data}, 2_000
+
+      assert :ok = Dimse.release(assoc1, 5_000)
+
+      # Second association: N-EVENT-REPORT (commitment result)
+      {:ok, assoc2} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "SC_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@storage_commitment_push]
+        )
+
+      wait_for_established(assoc2)
+
+      assert {:ok, 0x0000, nil} =
+               Dimse.n_event_report(assoc2, @storage_commitment_push, "1.2.3.4.5", 1, event_data,
+                 timeout: 5_000
+               )
+
+      assert_receive {:commitment_result, ^event_data}, 2_000
+
+      assert :ok = Dimse.release(assoc2, 5_000)
+      Dimse.stop_listener(ref)
+    end
+  end
+
   # --- Test handler factories ---
 
   defp store_handler(test_pid) do
@@ -1223,6 +1507,345 @@ defmodule Dimse.IntegrationTest do
 
         @impl true
         def handle_get(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+      end,
+      Macro.Env.location(__ENV__)
+    )
+
+    mod
+  end
+
+  # --- DIMSE-N handler factories ---
+
+  defp n_get_handler(test_pid, attr_data) do
+    mod = :"Dimse.Test.NGetHandler.#{System.unique_integer([:positive])}"
+
+    Module.create(
+      mod,
+      quote do
+        @behaviour Dimse.Handler
+
+        @impl true
+        def supported_abstract_syntaxes, do: [unquote(@test_n_sop_class)]
+
+        @impl true
+        def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+        @impl true
+        def handle_store(_command, _data, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_find(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_move(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_get(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        def handle_n_get(command, _state) do
+          send(unquote(test_pid), {:n_get_called, command})
+          {:ok, 0x0000, unquote(Macro.escape(attr_data))}
+        end
+      end,
+      Macro.Env.location(__ENV__)
+    )
+
+    mod
+  end
+
+  defp n_set_handler(test_pid, response_data) do
+    mod = :"Dimse.Test.NSetHandler.#{System.unique_integer([:positive])}"
+
+    Module.create(
+      mod,
+      quote do
+        @behaviour Dimse.Handler
+
+        @impl true
+        def supported_abstract_syntaxes, do: [unquote(@test_n_sop_class)]
+
+        @impl true
+        def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+        @impl true
+        def handle_store(_command, _data, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_find(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_move(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_get(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        def handle_n_set(_command, data_set, _state) do
+          send(unquote(test_pid), {:n_set_called, data_set})
+          {:ok, 0x0000, unquote(Macro.escape(response_data))}
+        end
+      end,
+      Macro.Env.location(__ENV__)
+    )
+
+    mod
+  end
+
+  defp n_action_handler(test_pid, reply_data) do
+    mod = :"Dimse.Test.NActionHandler.#{System.unique_integer([:positive])}"
+
+    Module.create(
+      mod,
+      quote do
+        @behaviour Dimse.Handler
+
+        @impl true
+        def supported_abstract_syntaxes, do: [unquote(@test_n_sop_class)]
+
+        @impl true
+        def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+        @impl true
+        def handle_store(_command, _data, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_find(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_move(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_get(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        def handle_n_action(_command, data_set, _state) do
+          send(unquote(test_pid), {:n_action_called, data_set})
+          {:ok, 0x0000, unquote(Macro.escape(reply_data))}
+        end
+      end,
+      Macro.Env.location(__ENV__)
+    )
+
+    mod
+  end
+
+  defp n_create_handler(test_pid, response_data) do
+    mod = :"Dimse.Test.NCreateHandler.#{System.unique_integer([:positive])}"
+
+    Module.create(
+      mod,
+      quote do
+        @behaviour Dimse.Handler
+
+        @impl true
+        def supported_abstract_syntaxes, do: [unquote(@test_n_sop_class)]
+
+        @impl true
+        def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+        @impl true
+        def handle_store(_command, _data, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_find(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_move(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_get(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        def handle_n_create(_command, data_set, _state) do
+          send(unquote(test_pid), {:n_create_called, data_set})
+          {:ok, 0x0000, unquote(Macro.escape(response_data))}
+        end
+      end,
+      Macro.Env.location(__ENV__)
+    )
+
+    mod
+  end
+
+  defp n_delete_handler(test_pid) do
+    mod = :"Dimse.Test.NDeleteHandler.#{System.unique_integer([:positive])}"
+
+    Module.create(
+      mod,
+      quote do
+        @behaviour Dimse.Handler
+
+        @impl true
+        def supported_abstract_syntaxes, do: [unquote(@test_n_sop_class)]
+
+        @impl true
+        def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+        @impl true
+        def handle_store(_command, _data, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_find(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_move(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_get(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        def handle_n_delete(command, _state) do
+          send(unquote(test_pid), {:n_delete_called, command})
+          {:ok, 0x0000}
+        end
+      end,
+      Macro.Env.location(__ENV__)
+    )
+
+    mod
+  end
+
+  defp n_event_report_handler(test_pid) do
+    mod = :"Dimse.Test.NEventReportHandler.#{System.unique_integer([:positive])}"
+
+    Module.create(
+      mod,
+      quote do
+        @behaviour Dimse.Handler
+
+        @impl true
+        def supported_abstract_syntaxes, do: [unquote(@test_n_sop_class)]
+
+        @impl true
+        def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+        @impl true
+        def handle_store(_command, _data, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_find(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_move(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_get(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        def handle_n_event_report(_command, data_set, _state) do
+          send(unquote(test_pid), {:n_event_report_called, data_set})
+          {:ok, 0x0000, nil}
+        end
+      end,
+      Macro.Env.location(__ENV__)
+    )
+
+    mod
+  end
+
+  defp n_error_handler do
+    mod = :"Dimse.Test.NErrorHandler.#{System.unique_integer([:positive])}"
+
+    Module.create(
+      mod,
+      quote do
+        @behaviour Dimse.Handler
+
+        @impl true
+        def supported_abstract_syntaxes, do: [unquote(@test_n_sop_class)]
+
+        @impl true
+        def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+        @impl true
+        def handle_store(_command, _data, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_find(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_move(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_get(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        # No N-* callbacks — should return 0x0112
+      end,
+      Macro.Env.location(__ENV__)
+    )
+
+    mod
+  end
+
+  defp n_get_echo_handler(test_pid, attr_data) do
+    mod = :"Dimse.Test.NGetEchoHandler.#{System.unique_integer([:positive])}"
+
+    Module.create(
+      mod,
+      quote do
+        @behaviour Dimse.Handler
+
+        @impl true
+        def supported_abstract_syntaxes do
+          ["1.2.840.10008.1.1", unquote(@test_n_sop_class)]
+        end
+
+        @impl true
+        def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+        @impl true
+        def handle_store(_command, _data, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_find(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_move(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_get(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        def handle_n_get(_command, _state) do
+          send(unquote(test_pid), :n_get_echo_called)
+          {:ok, 0x0000, unquote(Macro.escape(attr_data))}
+        end
+      end,
+      Macro.Env.location(__ENV__)
+    )
+
+    mod
+  end
+
+  defp storage_commitment_handler(test_pid) do
+    mod = :"Dimse.Test.StorageCommitmentHandler.#{System.unique_integer([:positive])}"
+
+    Module.create(
+      mod,
+      quote do
+        @behaviour Dimse.Handler
+
+        @impl true
+        def supported_abstract_syntaxes, do: [unquote(@storage_commitment_push)]
+
+        @impl true
+        def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+        @impl true
+        def handle_store(_command, _data, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_find(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_move(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_get(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        def handle_n_action(_command, data_set, _state) do
+          send(unquote(test_pid), {:commitment_requested, data_set})
+          {:ok, 0x0000, nil}
+        end
+
+        def handle_n_event_report(_command, data_set, _state) do
+          send(unquote(test_pid), {:commitment_result, data_set})
+          {:ok, 0x0000, nil}
+        end
       end,
       Macro.Env.location(__ENV__)
     )

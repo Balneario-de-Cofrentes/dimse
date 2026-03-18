@@ -22,7 +22,7 @@ defmodule Dimse.Association do
   alias Dimse.Command.Fields
 
   @implementation_uid "1.2.826.0.1.3680043.8.498.1"
-  @implementation_version "DIMSE_0.4.1"
+  @implementation_version "DIMSE_0.5.0"
 
   @default_transfer_syntaxes MapSet.new([
                                "1.2.840.10008.1.2",
@@ -734,22 +734,22 @@ defmodule Dimse.Association do
         0x0030 ->
           # C-ECHO-RQ
           case handler.handle_echo(message.command, state) do
-            {:ok, status} -> {status, nil}
-            {:error, status, _msg} -> {status, nil}
+            {:ok, status} -> {status, nil, %{}}
+            {:error, status, _msg} -> {status, nil, %{}}
           end
 
         0x0001 ->
           # C-STORE-RQ
           case handler.handle_store(message.command, message.data, state) do
-            {:ok, status} -> {status, nil}
-            {:error, status, _msg} -> {status, nil}
+            {:ok, status} -> {status, nil, %{}}
+            {:error, status, _msg} -> {status, nil, %{}}
           end
 
         0x0020 ->
           # C-FIND-RQ
           case handler.handle_find(message.command, message.data, state) do
             {:ok, results} -> send_find_results(results, message, state)
-            {:error, status, _msg} -> {status, nil}
+            {:error, status, _msg} -> {status, nil, %{}}
           end
 
         0x0010 ->
@@ -766,9 +766,29 @@ defmodule Dimse.Association do
           # already completed. No separate response is sent for C-CANCEL.
           :no_response
 
+        # --- DIMSE-N services (PS3.7 Chapter 10) ---
+
+        0x0110 ->
+          dispatch_n_request(handler, :handle_n_get, 2, message, state)
+
+        0x0120 ->
+          dispatch_n_request(handler, :handle_n_set, 3, message, state)
+
+        0x0130 ->
+          dispatch_n_request(handler, :handle_n_action, 3, message, state)
+
+        0x0140 ->
+          dispatch_n_request(handler, :handle_n_create, 3, message, state)
+
+        0x0150 ->
+          dispatch_n_request(handler, :handle_n_delete, 2, message, state)
+
+        0x0100 ->
+          dispatch_n_request(handler, :handle_n_event_report, 3, message, state)
+
         _ ->
           # Unsupported command
-          {0xC000, nil}
+          {0xC000, nil, %{}}
       end
 
     duration = System.monotonic_time(:millisecond) - start_time
@@ -794,7 +814,7 @@ defmodule Dimse.Association do
 
         process_pdv_items(remaining_pdvs, new_state)
 
-      {status, response_data} ->
+      {status, response_data, extra_tags} ->
         Telemetry.emit(:command_stop, %{duration: duration}, %{
           association_id: state.association_id,
           command_field: command_field,
@@ -803,15 +823,22 @@ defmodule Dimse.Association do
 
         response_field = Bitwise.bor(command_field, 0x8000)
 
+        sop_class_uid =
+          Command.affected_sop_class_uid(message.command) ||
+            Map.get(message.command, {0x0000, 0x0003}) || ""
+
+        data_set_type = if response_data, do: 0x0000, else: 0x0101
+
         response_command =
           %{
-            {0x0000, 0x0002} => Command.affected_sop_class_uid(message.command) || "",
+            {0x0000, 0x0002} => sop_class_uid,
             {0x0000, 0x0100} => response_field,
             {0x0000, 0x0120} => message_id,
-            {0x0000, 0x0800} => 0x0101,
+            {0x0000, 0x0800} => data_set_type,
             {0x0000, 0x0900} => status
           }
           |> maybe_put_instance_uid(command_field, message.command)
+          |> merge_extra_tags(extra_tags)
 
         pdus =
           Message.fragment(
@@ -844,7 +871,7 @@ defmodule Dimse.Association do
     end)
 
     # Final success (no data set)
-    {0x0000, nil}
+    {0x0000, nil, %{}}
   end
 
   # --- C-GET SCU: handle incoming C-STORE-RQ in get_mode ---
@@ -878,7 +905,7 @@ defmodule Dimse.Association do
   defp dispatch_get_request(handler, message, state) do
     case handler.handle_get(message.command, message.data, state) do
       {:ok, []} ->
-        {0x0000, nil}
+        {0x0000, nil, %{}}
 
       {:ok, instances} ->
         sop_class_uid = Command.affected_sop_class_uid(message.command) || ""
@@ -900,7 +927,7 @@ defmodule Dimse.Association do
         {:async_sub_operation, %{state | sub_operation: sub_op}}
 
       {:error, status, _msg} ->
-        {status, nil}
+        {status, nil, %{}}
     end
   end
 
@@ -911,7 +938,7 @@ defmodule Dimse.Association do
 
     case handler.handle_move(message.command, message.data, state) do
       {:ok, []} ->
-        {0x0000, nil}
+        {0x0000, nil, %{}}
 
       {:ok, instances} ->
         resolve_result =
@@ -953,15 +980,15 @@ defmodule Dimse.Association do
                 {:async_sub_operation, %{state | sub_operation: sub_op}}
 
               {:error, _reason} ->
-                {0xA801, nil}
+                {0xA801, nil, %{}}
             end
 
           {:error, _} ->
-            {0xA801, nil}
+            {0xA801, nil, %{}}
         end
 
       {:error, status, _msg} ->
-        {status, nil}
+        {status, nil, %{}}
     end
   end
 
@@ -1117,7 +1144,10 @@ defmodule Dimse.Association do
   end
 
   defp send_dimse_request(command_set, data, state, on_sent) do
-    sop_class = Map.get(command_set, {0x0000, 0x0002})
+    # DIMSE-N services use RequestedSOPClassUID (0000,0003) instead of Affected (0000,0002)
+    sop_class =
+      Map.get(command_set, {0x0000, 0x0002}) || Map.get(command_set, {0x0000, 0x0003})
+
     context_id = find_context_id(state.negotiated_contexts, sop_class)
 
     if context_id do
@@ -1139,9 +1169,13 @@ defmodule Dimse.Association do
   defp request_on_negotiated_context?(%Message{context_id: context_id, command: command}, state) do
     case Map.get(state.negotiated_contexts, context_id) do
       {abstract_syntax, _transfer_syntax} ->
-        case Command.affected_sop_class_uid(command) do
+        # Check both Affected (0000,0002) and Requested (0000,0003) SOP Class UIDs
+        sop_class_uid =
+          Command.affected_sop_class_uid(command) || Map.get(command, {0x0000, 0x0003})
+
+        case sop_class_uid do
           nil -> true
-          sop_class_uid -> sop_class_uid == abstract_syntax
+          uid -> uid == abstract_syntax
         end
 
       nil ->
@@ -1164,6 +1198,44 @@ defmodule Dimse.Association do
     |> Enum.with_index(1)
     |> Map.new(fn {abstract_syntax, idx} -> {idx * 2 - 1, abstract_syntax} end)
   end
+
+  # --- DIMSE-N SCP dispatch helper ---
+
+  defp dispatch_n_request(handler, callback, arity, message, state) do
+    if function_exported?(handler, callback, arity) do
+      result =
+        case arity do
+          2 -> apply(handler, callback, [message.command, state])
+          3 -> apply(handler, callback, [message.command, message.data, state])
+        end
+
+      extra_tags = build_n_response_extra_tags(message.command)
+
+      case result do
+        {:ok, status, data} -> {status, data, extra_tags}
+        {:ok, status} -> {status, nil, extra_tags}
+        {:error, status, _msg} -> {status, nil, extra_tags}
+      end
+    else
+      # No Such SOP Class (PS3.7 Annex C)
+      {0x0112, nil, %{}}
+    end
+  end
+
+  defp build_n_response_extra_tags(command) do
+    instance_uid = Map.get(command, {0x0000, 0x1001}) || Map.get(command, {0x0000, 0x1000})
+
+    [
+      {{0x0000, 0x1000}, instance_uid},
+      {{0x0000, 0x1002}, Map.get(command, {0x0000, 0x1002})},
+      {{0x0000, 0x1008}, Map.get(command, {0x0000, 0x1008})}
+    ]
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    |> Map.new()
+  end
+
+  defp merge_extra_tags(cmd, extra_tags) when map_size(extra_tags) == 0, do: cmd
+  defp merge_extra_tags(cmd, extra_tags), do: Map.merge(cmd, extra_tags)
 
   # C-STORE-RSP must echo back the AffectedSOPInstanceUID (PS3.7 Table 9.1-1)
   defp maybe_put_instance_uid(cmd, 0x0001, request_command) do

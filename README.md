@@ -7,8 +7,9 @@
 
 Pure Elixir DICOM DIMSE networking library for the BEAM.
 
-Implements the DICOM Upper Layer Protocol ([PS3.8](https://dicom.nema.org/medical/dicom/current/output/html/part08.html))
-and DIMSE-C message services ([PS3.7](https://dicom.nema.org/medical/dicom/current/output/html/part07.html))
+Implements the DICOM Upper Layer Protocol ([PS3.8](https://dicom.nema.org/medical/dicom/current/output/html/part08.html)),
+DIMSE-C message services ([PS3.7 Ch.9](https://dicom.nema.org/medical/dicom/current/output/html/part07.html#chapter_9)),
+and DIMSE-N notification/management services ([PS3.7 Ch.10](https://dicom.nema.org/medical/dicom/current/output/html/part07.html#chapter_10))
 for building SCP (server) and SCU (client) applications.
 
 Built on Elixir's binary pattern matching for fast, correct PDU parsing, with
@@ -19,8 +20,9 @@ one GenServer per association for fault isolation and natural backpressure.
 - **Upper Layer Protocol** -- full PDU encode/decode for all 7 PDU types (PS3.8 Section 9.3)
 - **Association state machine** -- GenServer-per-association with ARTIM timer (PS3.8 Section 9.2)
 - **DIMSE-C services** -- C-ECHO, C-STORE, C-FIND, C-MOVE, C-GET
-- **SCP behaviour** -- `Dimse.Handler` callbacks for implementing DICOM servers
-- **SCU client API** -- connect, echo, store, find, move, get, cancel, release, abort
+- **DIMSE-N services** -- N-EVENT-REPORT, N-GET, N-SET, N-ACTION, N-CREATE, N-DELETE
+- **SCP behaviour** -- `Dimse.Handler` callbacks for implementing DICOM servers (all 11 services)
+- **SCU client API** -- connect, echo, store, find, move, get, cancel, n_get, n_set, n_action, n_create, n_delete, n_event_report, release, abort
 - **Presentation context negotiation** -- abstract syntax + transfer syntax matching
 - **Max PDU length negotiation** -- with automatic message fragmentation
 - **Telemetry** -- `:telemetry`-based events for association lifecycle, PDU, and command metrics
@@ -34,7 +36,7 @@ Add `dimse` to your `mix.exs` dependencies:
 ```elixir
 def deps do
   [
-    {:dimse, "~> 0.4.1"}
+    {:dimse, "~> 0.5.0"}
   ]
 end
 ```
@@ -168,6 +170,39 @@ end
 :ok = Dimse.release(assoc)
 ```
 
+### DIMSE-N SCU (Client)
+
+```elixir
+# Storage Commitment example (PS3.4 Annex J)
+commitment_uid = "1.2.840.10008.1.20.1"
+
+{:ok, assoc} = Dimse.connect("192.168.1.10", 11112,
+  calling_ae: "MY_SCU",
+  called_ae: "REMOTE_SCP",
+  abstract_syntaxes: [commitment_uid]
+)
+
+# Request storage commitment (N-ACTION)
+{:ok, 0x0000, _reply} = Dimse.n_action(assoc, commitment_uid, instance_uid, 1, action_data)
+
+# Retrieve attributes (N-GET)
+{:ok, 0x0000, attrs} = Dimse.n_get(assoc, sop_class_uid, sop_instance_uid)
+
+# Modify attributes (N-SET)
+{:ok, 0x0000, updated} = Dimse.n_set(assoc, sop_class_uid, sop_instance_uid, modifications)
+
+# Create a managed instance (N-CREATE)
+{:ok, 0x0000, created} = Dimse.n_create(assoc, sop_class_uid, attributes)
+
+# Delete a managed instance (N-DELETE)
+{:ok, 0x0000, nil} = Dimse.n_delete(assoc, sop_class_uid, sop_instance_uid)
+
+# Send an event notification (N-EVENT-REPORT)
+{:ok, 0x0000, _data} = Dimse.n_event_report(assoc, sop_class_uid, sop_instance_uid, 1, event_data)
+
+:ok = Dimse.release(assoc)
+```
+
 ## Architecture
 
 ```
@@ -197,6 +232,12 @@ lib/dimse/
   scu/find.ex           -- C-FIND SCU
   scu/move.ex           -- C-MOVE SCU
   scu/get.ex            -- C-GET SCU
+  scu/n_get.ex          -- N-GET SCU
+  scu/n_set.ex          -- N-SET SCU
+  scu/n_action.ex       -- N-ACTION SCU
+  scu/n_create.ex       -- N-CREATE SCU
+  scu/n_delete.ex       -- N-DELETE SCU
+  scu/n_event_report.ex -- N-EVENT-REPORT SCU
   telemetry.ex          -- Event definitions
 ```
 
@@ -204,7 +245,7 @@ lib/dimse/
 
 | Part | Title | Coverage |
 |------|-------|----------|
-| PS3.7 | DIMSE Service and Protocol | DIMSE-C command set encoding, command fields, status codes |
+| PS3.7 | DIMSE Service and Protocol | DIMSE-C (Ch.9) + DIMSE-N (Ch.10), command set encoding, command fields, status codes |
 | PS3.8 | Network Communication Support | Upper Layer PDUs (all 7 types), association state machine, presentation context negotiation |
 
 ### DIMSE Services
@@ -216,6 +257,12 @@ lib/dimse/
 | C-FIND  | Yes | Yes | Query patient/study/series/instance |
 | C-MOVE  | Yes | Yes | Retrieve via C-STORE sub-ops to destination AE |
 | C-GET   | Yes | Yes | Retrieve via C-STORE sub-ops on same association |
+| N-EVENT-REPORT | Yes | Yes | Event notification |
+| N-GET   | Yes | Yes | Retrieve managed SOP Instance attributes |
+| N-SET   | Yes | Yes | Modify managed SOP Instance attributes |
+| N-ACTION | Yes | Yes | Request action on managed SOP Instance |
+| N-CREATE | Yes | Yes | Create managed SOP Instance |
+| N-DELETE | Yes | Yes | Delete managed SOP Instance |
 
 ## Testing
 
@@ -226,8 +273,9 @@ mix format --check-formatted
 ```
 
 Property-based tests using [StreamData](https://hex.pm/packages/stream_data)
-verify PDU encode/decode roundtrips. Integration tests verify C-ECHO, C-STORE,
-C-FIND, C-MOVE, and C-GET SCP/SCU interoperability over TCP.
+verify PDU encode/decode roundtrips. Integration tests verify all 11 DIMSE
+services (C-ECHO, C-STORE, C-FIND, C-MOVE, C-GET, N-GET, N-SET, N-ACTION,
+N-CREATE, N-DELETE, N-EVENT-REPORT) SCP/SCU interoperability over TCP.
 
 ## Project Positioning
 
@@ -248,14 +296,15 @@ pure-Elixir DICOM toolkit:
 | PDU decode/encode | All 7 types | 6/7 (no A-ASSOCIATE-RJ) | 6/7 (no A-ABORT) |
 | Association state machine | 5-phase + ARTIM timer | gen_statem (2 states) | GenServer (4 states) |
 | DIMSE-C services | C-ECHO, C-STORE, C-FIND, C-MOVE, C-GET | C-ECHO, C-STORE | C-ECHO, C-STORE, partial C-FIND |
-| SCP behaviour | `@behaviour` with 5 callbacks | Hardcoded routing | Event handler callbacks |
+| DIMSE-N services | All 6 (N-GET, N-SET, N-ACTION, N-CREATE, N-DELETE, N-EVENT-REPORT) | None | None |
+| SCP behaviour | `@behaviour` with 11 callbacks (5 DIMSE-C + 6 DIMSE-N) | Hardcoded routing | Event handler callbacks |
 | SCU client | Full API (open/release/abort/echo) | gen_statem sender | No SCU |
 | Max PDU fragmentation | Yes (encode + reassembly) | Yes (sender chunking) | Parsed, not enforced |
 | ARTIM timer | PS3.8 compliant (30s default) | No | No |
 | Telemetry | 6 event types | Logger only | Logger only |
 | Transfer syntaxes | IVR LE, EVR LE | 3 uncompressed | 13 registered (3 decoded) |
 | Property tests | StreamData (10 properties) | proper (extensive) | No |
-| Tests | 158 (148 tests + 10 properties) | ~81 eunit + proper | ~25 |
+| Tests | 202 (192 tests + 10 properties) | ~81 eunit + proper | ~25 |
 | Runtime deps | 3 (dicom, ranch, telemetry) | 2 (ranch, recon) | 0 (stdlib only) |
 | Source LOC | ~2,700 | ~14,500 | ~2,600 (+ 26K tag dict) |
 | Maintained | Active | Active | Active |

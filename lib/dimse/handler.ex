@@ -99,6 +99,48 @@ defmodule Dimse.Handler do
             ) ::
               {:ok, [{String.t(), String.t(), binary()}]} | {:error, integer(), String.t()}
 
+  # --- DIMSE-N callbacks (PS3.7 Chapter 10) ---
+
+  @doc "Called when an N-GET-RQ is received. Return attribute data."
+  @callback handle_n_get(command :: map(), state :: Dimse.Association.State.t()) ::
+              {:ok, integer(), binary() | nil} | {:error, integer(), String.t()}
+
+  @doc "Called when an N-SET-RQ is received with modification data."
+  @callback handle_n_set(
+              command :: map(),
+              data_set :: binary(),
+              state :: Dimse.Association.State.t()
+            ) ::
+              {:ok, integer(), binary() | nil} | {:error, integer(), String.t()}
+
+  @doc "Called when an N-ACTION-RQ is received with action info."
+  @callback handle_n_action(
+              command :: map(),
+              data_set :: binary(),
+              state :: Dimse.Association.State.t()
+            ) ::
+              {:ok, integer(), binary() | nil} | {:error, integer(), String.t()}
+
+  @doc "Called when an N-CREATE-RQ is received with attributes."
+  @callback handle_n_create(
+              command :: map(),
+              data_set :: binary(),
+              state :: Dimse.Association.State.t()
+            ) ::
+              {:ok, integer(), binary() | nil} | {:error, integer(), String.t()}
+
+  @doc "Called when an N-DELETE-RQ is received."
+  @callback handle_n_delete(command :: map(), state :: Dimse.Association.State.t()) ::
+              {:ok, integer()} | {:error, integer(), String.t()}
+
+  @doc "Called when an N-EVENT-REPORT-RQ is received with event info."
+  @callback handle_n_event_report(
+              command :: map(),
+              data_set :: binary(),
+              state :: Dimse.Association.State.t()
+            ) ::
+              {:ok, integer(), binary() | nil} | {:error, integer(), String.t()}
+
   @doc """
   Returns the set of abstract syntaxes (SOP Class UIDs) this handler supports.
 
@@ -116,7 +158,16 @@ defmodule Dimse.Handler do
   @callback resolve_ae(ae_title :: String.t()) ::
               {:ok, {String.t(), pos_integer()}} | {:error, term()}
 
-  @optional_callbacks [supported_abstract_syntaxes: 0, resolve_ae: 1]
+  @optional_callbacks [
+    supported_abstract_syntaxes: 0,
+    resolve_ae: 1,
+    handle_n_get: 2,
+    handle_n_set: 3,
+    handle_n_action: 3,
+    handle_n_create: 3,
+    handle_n_delete: 2,
+    handle_n_event_report: 3
+  ]
 
   @doc false
   defmacro __using__(_opts) do

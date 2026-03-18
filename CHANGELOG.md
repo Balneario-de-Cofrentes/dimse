@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-03-18
+
+### Added
+
+- All 6 DIMSE-N services (PS3.7 Chapter 10): N-EVENT-REPORT, N-GET, N-SET, N-ACTION, N-CREATE, N-DELETE
+- SCU modules: `Dimse.Scu.NGet`, `Dimse.Scu.NSet`, `Dimse.Scu.NAction`, `Dimse.Scu.NCreate`, `Dimse.Scu.NDelete`, `Dimse.Scu.NEventReport`
+- Public API: `Dimse.n_get/4`, `Dimse.n_set/5`, `Dimse.n_action/6`, `Dimse.n_create/4`, `Dimse.n_delete/4`, `Dimse.n_event_report/6`
+- 6 optional handler callbacks: `handle_n_get/2`, `handle_n_set/3`, `handle_n_action/3`, `handle_n_create/3`, `handle_n_delete/2`, `handle_n_event_report/3`
+- SCP dispatch for all 6 DIMSE-N command fields with `function_exported?/3` fallback (0x0112 No Such SOP Class)
+- Correct Requested vs Affected SOP Class/Instance UID handling per PS3.7 Table 10.1
+- DIMSE-N response builder with data set support (CommandDataSetType 0x0000 when data present)
+- Extra response tags: AffectedSOPInstanceUID, EventTypeID, ActionTypeID echoed in N-*-RSP
+- 35 SCU unit tests (build_command_set for all 6 services)
+- 9 integration tests: N-GET, N-SET, N-ACTION, N-CREATE, N-DELETE, N-EVENT-REPORT round trips, error handling, mixed DIMSE-C+N, Storage Commitment flow
+
+### Changed
+
+- `send_dimse_request/4` now checks both AffectedSOPClassUID (0000,0002) and RequestedSOPClassUID (0000,0003) for context lookup
+- `request_on_negotiated_context?/2` validates both Affected and Requested SOP Class UIDs
+- Response builder dynamically sets CommandDataSetType based on response data presence (was hardcoded 0x0101)
+
 ## [0.4.1] - 2026-03-18
 
 ### Added
@@ -86,7 +107,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Telemetry event definitions for association lifecycle and PDU I/O
 - CI workflow with Elixir 1.16/1.17/1.18 matrix
 
-[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.3.0...v0.4.1
 [0.3.0]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.1.0...v0.2.0

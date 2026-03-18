@@ -2,8 +2,9 @@ defmodule Dimse do
   @moduledoc """
   Pure Elixir DICOM DIMSE networking library.
 
-  Provides the DICOM Upper Layer Protocol (PS3.8) and DIMSE-C message services
-  (PS3.7) for building DICOM SCP (server) and SCU (client) applications on the BEAM.
+  Provides the DICOM Upper Layer Protocol (PS3.8), DIMSE-C message services
+  (PS3.7 Chapter 9) and DIMSE-N notification/management services (PS3.7 Chapter 10)
+  for building DICOM SCP (server) and SCU (client) applications on the BEAM.
 
   ## Public API
 
@@ -12,7 +13,7 @@ defmodule Dimse do
       Dimse.start_listener(port: 11112, handler: MyApp.DicomHandler)
       Dimse.stop_listener(ref)
 
-  ### Client (SCU)
+  ### Client (SCU) — DIMSE-C
 
       {:ok, assoc} = Dimse.connect("192.168.1.10", 11112, calling_ae: "MY_SCU", called_ae: "REMOTE_SCP")
       :ok = Dimse.echo(assoc)
@@ -21,6 +22,18 @@ defmodule Dimse do
       :ok = Dimse.cancel(assoc, message_id)
       {:ok, result} = Dimse.move(assoc, :study, query, dest_ae: "DEST_AE")
       {:ok, data_sets} = Dimse.get(assoc, :study, query)
+
+  ### Client (SCU) — DIMSE-N
+
+      {:ok, status, data} = Dimse.n_get(assoc, sop_class_uid, sop_instance_uid)
+      {:ok, status, data} = Dimse.n_set(assoc, sop_class_uid, sop_instance_uid, modifications)
+      {:ok, status, data} = Dimse.n_action(assoc, sop_class_uid, sop_instance_uid, action_type_id, action_info)
+      {:ok, status, data} = Dimse.n_create(assoc, sop_class_uid, attributes)
+      {:ok, status, nil}  = Dimse.n_delete(assoc, sop_class_uid, sop_instance_uid)
+      {:ok, status, data} = Dimse.n_event_report(assoc, sop_class_uid, sop_instance_uid, event_type_id, event_info)
+
+  ### Connection management
+
       :ok = Dimse.release(assoc)
       :ok = Dimse.abort(assoc)
 
@@ -227,6 +240,91 @@ defmodule Dimse do
     do: Dimse.Scu.Get.sop_class_uid(level)
 
   defp resolve_get_sop_class(uid) when is_binary(uid), do: uid
+
+  # --- DIMSE-N Services ---
+
+  @doc """
+  Sends an N-GET-RQ to retrieve attributes from a managed SOP Instance.
+
+  ## Options
+
+    * `:attribute_identifier_list` — list of `{group, element}` tags to retrieve
+    * `:timeout` — response timeout in ms (default: `30_000`)
+
+  Returns `{:ok, status, data}` or `{:error, reason}`.
+  """
+  @spec n_get(pid(), String.t(), String.t(), keyword()) ::
+          {:ok, integer(), binary() | nil} | {:error, term()}
+  def n_get(assoc, sop_class_uid, sop_instance_uid, opts \\ []) do
+    Dimse.Scu.NGet.query(assoc, sop_class_uid, sop_instance_uid, opts)
+  end
+
+  @doc """
+  Sends an N-SET-RQ to modify attributes on a managed SOP Instance.
+
+  Returns `{:ok, status, data}` or `{:error, reason}`.
+  """
+  @spec n_set(pid(), String.t(), String.t(), binary(), keyword()) ::
+          {:ok, integer(), binary() | nil} | {:error, term()}
+  def n_set(assoc, sop_class_uid, sop_instance_uid, data, opts \\ []) do
+    Dimse.Scu.NSet.send(assoc, sop_class_uid, sop_instance_uid, data, opts)
+  end
+
+  @doc """
+  Sends an N-ACTION-RQ to request an action on a managed SOP Instance.
+
+  Returns `{:ok, status, data}` or `{:error, reason}`.
+  """
+  @spec n_action(pid(), String.t(), String.t(), integer(), binary() | nil, keyword()) ::
+          {:ok, integer(), binary() | nil} | {:error, term()}
+  def n_action(assoc, sop_class_uid, sop_instance_uid, action_type_id, data, opts \\ []) do
+    Dimse.Scu.NAction.send(assoc, sop_class_uid, sop_instance_uid, action_type_id, data, opts)
+  end
+
+  @doc """
+  Sends an N-CREATE-RQ to create a new managed SOP Instance.
+
+  ## Options
+
+    * `:sop_instance_uid` — optional proposed SOP Instance UID
+    * `:timeout` — response timeout in ms (default: `30_000`)
+
+  Returns `{:ok, status, data}` or `{:error, reason}`.
+  """
+  @spec n_create(pid(), String.t(), binary() | nil, keyword()) ::
+          {:ok, integer(), binary() | nil} | {:error, term()}
+  def n_create(assoc, sop_class_uid, data, opts \\ []) do
+    Dimse.Scu.NCreate.send(assoc, sop_class_uid, data, opts)
+  end
+
+  @doc """
+  Sends an N-DELETE-RQ to delete a managed SOP Instance.
+
+  Returns `{:ok, status, nil}` or `{:error, reason}`.
+  """
+  @spec n_delete(pid(), String.t(), String.t(), keyword()) ::
+          {:ok, integer(), nil} | {:error, term()}
+  def n_delete(assoc, sop_class_uid, sop_instance_uid, opts \\ []) do
+    Dimse.Scu.NDelete.send(assoc, sop_class_uid, sop_instance_uid, opts)
+  end
+
+  @doc """
+  Sends an N-EVENT-REPORT-RQ to notify the SCP of an event.
+
+  Returns `{:ok, status, data}` or `{:error, reason}`.
+  """
+  @spec n_event_report(pid(), String.t(), String.t(), integer(), binary() | nil, keyword()) ::
+          {:ok, integer(), binary() | nil} | {:error, term()}
+  def n_event_report(assoc, sop_class_uid, sop_instance_uid, event_type_id, data, opts \\ []) do
+    Dimse.Scu.NEventReport.send(
+      assoc,
+      sop_class_uid,
+      sop_instance_uid,
+      event_type_id,
+      data,
+      opts
+    )
+  end
 
   @doc "Sends an A-RELEASE-RQ to gracefully close the association."
   @spec release(pid(), timeout()) :: :ok | {:error, term()}
