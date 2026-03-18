@@ -50,15 +50,22 @@ defmodule Dimse.Scu do
     * `:transfer_syntaxes` — list of Transfer Syntax UIDs
     * `:max_pdu_length` — max PDU length (default: `16_384`)
     * `:timeout` — connection timeout in ms (default: `30_000`)
+    * `:tls` — TLS options (keyword list). When present, the SCU connects
+      via TLS instead of plain TCP. Accepts standard `:ssl` options:
+      - `:cacertfile` — path to CA certificate for server verification
+      - `:verify` — `:verify_peer` to verify the server certificate
+      - `:certfile` — client certificate for mutual TLS
+      - `:keyfile` — client private key for mutual TLS
   """
   @spec open(String.t(), pos_integer(), keyword()) :: {:ok, pid()} | {:error, term()}
   def open(host, port, opts \\ []) do
     abstract_syntaxes = Keyword.get(opts, :abstract_syntaxes, [@verification_uid])
+    timeout = Keyword.get(opts, :timeout, 30_000)
 
     config = %Dimse.Association.Config{
       ae_title: Keyword.get(opts, :calling_ae, "DIMSE"),
       max_pdu_length: Keyword.get(opts, :max_pdu_length, 16_384),
-      dimse_timeout: Keyword.get(opts, :timeout, 30_000)
+      dimse_timeout: timeout
     }
 
     assoc_opts =
@@ -70,12 +77,16 @@ defmodule Dimse.Scu do
         called_ae: Keyword.get(opts, :called_ae, "ANY-SCP"),
         abstract_syntaxes: abstract_syntaxes,
         config: config,
-        timeout: Keyword.get(opts, :timeout, 30_000)
+        timeout: timeout
       ]
       |> maybe_add(:transfer_syntaxes, Keyword.get(opts, :transfer_syntaxes))
+      |> maybe_add(:tls, Keyword.get(opts, :tls))
 
     # Use start (not start_link) so connection failures don't crash the caller
-    Dimse.Association.start(assoc_opts)
+    with {:ok, pid} <- Dimse.Association.start(assoc_opts),
+         :ok <- await_established(pid, timeout) do
+      {:ok, pid}
+    end
   end
 
   defp maybe_add(opts, _key, nil), do: opts
@@ -111,4 +122,59 @@ defmodule Dimse.Scu do
         {:error, {:status, status, data}}
     end
   end
+
+  defp await_established(pid, timeout) do
+    ref = Process.monitor(pid)
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_await_established(pid, ref, deadline)
+  end
+
+  defp do_await_established(pid, ref, deadline) do
+    receive do
+      {:DOWN, ^ref, :process, ^pid, reason} ->
+        {:error, normalize_connect_exit(reason)}
+    after
+      10 ->
+        case Dimse.Association.negotiated_contexts(pid) do
+          contexts when map_size(contexts) > 0 ->
+            Process.demonitor(ref, [:flush])
+            :ok
+
+          _ ->
+            if System.monotonic_time(:millisecond) >= deadline do
+              Dimse.Association.abort(pid)
+              Process.demonitor(ref, [:flush])
+              {:error, :timeout}
+            else
+              do_await_established(pid, ref, deadline)
+            end
+        end
+    end
+  catch
+    :exit, {:noproc, _} ->
+      wait_for_down(pid, ref)
+
+    :exit, {:normal, _} ->
+      wait_for_down(pid, ref)
+  end
+
+  defp wait_for_down(pid, ref) do
+    receive do
+      {:DOWN, ^ref, :process, ^pid, reason} ->
+        {:error, normalize_connect_exit(reason)}
+    after
+      0 ->
+        {:error, :closed}
+    end
+  end
+
+  defp normalize_connect_exit({:rejected, result, source, reason}),
+    do: {:rejected, result, source, reason}
+
+  defp normalize_connect_exit({:aborted, source, reason}),
+    do: {:aborted, source, reason}
+
+  defp normalize_connect_exit({:shutdown, reason}), do: normalize_connect_exit(reason)
+  defp normalize_connect_exit(:normal), do: :closed
+  defp normalize_connect_exit(reason), do: reason
 end

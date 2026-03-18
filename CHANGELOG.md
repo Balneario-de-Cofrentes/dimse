@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-03-18
+
+### Added
+
+- TLS / DICOM Secure Transport (PS3.15 Annex B) support for both SCP and SCU
+- `start_listener/1` accepts `:tls` option to use `ranch_ssl` transport
+- `connect/3` accepts `:tls` option to connect via `:ssl` instead of `:gen_tcp`
+- Full mutual TLS (mTLS) support: SCP can require client certificates
+- All standard `:ssl` options (`:certfile`, `:keyfile`, `:cacertfile`, `:verify`, `:fail_if_no_peer_cert`) passed through to OTP
+- `:ssl` and `:public_key` added to `extra_applications` (OTP stdlib, zero new deps)
+- 7 TLS integration tests: C-ECHO over TLS, C-STORE over TLS, mutual TLS, DIMSE-N over TLS, mixed TCP+TLS listeners, untrusted CA rejection, missing client cert rejection
+- Dynamic test certificate generation using OTP `:public_key` (no cert files in repo)
+
+### Changed
+
+- `handle_info/2` now uses guards (`when proto in [:tcp, :ssl]`) instead of atom-specific clauses for socket messages
+- `send_pdu/2`, `reactivate_socket/1`, and `close_socket/1` handle `:ssl` transport alongside `:gen_tcp` and Ranch transports
+- Implementation version bumped to `DIMSE_0.6.0`
+
+### Fixed
+
+- `Dimse.connect/3` and `Dimse.Scu.open/3` now wait for association negotiation to succeed or fail before returning
+- `Dimse.n_create/4` now returns the created SOP Instance UID alongside status and response data
+- `N-CREATE` requests without an Attribute List now set `CommandDataSetType` correctly
+
 ## [0.5.1] - 2026-03-18
 
 ### Fixed

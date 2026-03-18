@@ -1,7 +1,7 @@
 defmodule Dimse.MixProject do
   use Mix.Project
 
-  @version "0.5.1"
+  @version "0.6.0"
   @source_url "https://github.com/Balneario-de-Cofrentes/dimse"
 
   def project do
@@ -27,7 +27,7 @@ defmodule Dimse.MixProject do
 
   def application do
     [
-      extra_applications: [:logger]
+      extra_applications: [:logger, :ssl, :public_key]
     ]
   end
 

@@ -835,7 +835,7 @@ defmodule Dimse.IntegrationTest do
 
       wait_for_established(assoc)
 
-      assert {:ok, 0x0000, ^response_data} =
+      assert {:ok, 0x0000, ^created_uid, ^response_data} =
                Dimse.n_create(assoc, @test_n_sop_class, create_data, timeout: 5_000)
 
       assert_receive {:n_create_called, ^create_data}, 2_000
@@ -870,6 +870,30 @@ defmodule Dimse.IntegrationTest do
                Dimse.Association.request(assoc, command_set, create_data, 5_000)
 
       assert response[{0x0000, 0x1000}] == created_uid
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+
+    test "SCU can send N-CREATE without an Attribute List" do
+      test_pid = self()
+      created_uid = "1.2.826.0.1.3680043.8.498.1001"
+      handler = n_create_handler(test_pid, nil, created_uid)
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "NCREATE_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@test_n_sop_class]
+        )
+
+      assert {:ok, 0x0000, ^created_uid, nil} =
+               Dimse.n_create(assoc, @test_n_sop_class, nil, timeout: 5_000)
+
+      assert_receive {:n_create_called, nil}, 2_000
 
       assert :ok = Dimse.release(assoc, 5_000)
       Dimse.stop_listener(ref)

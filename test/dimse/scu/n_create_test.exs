@@ -27,6 +27,11 @@ defmodule Dimse.Scu.NCreateTest do
       assert cmd[{0x0000, 0x0800}] == 0x0000
     end
 
+    test "sets CommandDataSetType to no data set when requested" do
+      cmd = NCreate.build_command_set("1.2.3", 1, data_set_present: false)
+      assert cmd[{0x0000, 0x0800}] == 0x0101
+    end
+
     test "includes AffectedSOPInstanceUID when provided" do
       cmd = NCreate.build_command_set("1.2.3", 1, sop_instance_uid: "1.2.3.4.5")
       assert cmd[{0x0000, 0x1000}] == "1.2.3.4.5"

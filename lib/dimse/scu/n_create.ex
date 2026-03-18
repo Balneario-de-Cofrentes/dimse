@@ -20,14 +20,22 @@ defmodule Dimse.Scu.NCreate do
   ## Options
 
     * `:sop_instance_uid` — optional AffectedSOPInstanceUID to propose
+    * `:data_set_present` — whether an Attribute List accompanies the request (default: `true`)
   """
   @spec build_command_set(String.t(), integer(), keyword()) :: map()
   def build_command_set(sop_class_uid, message_id, opts \\ []) do
+    data_set_type =
+      if Keyword.get(opts, :data_set_present, true) do
+        0x0000
+      else
+        0x0101
+      end
+
     %{
       {0x0000, 0x0002} => sop_class_uid,
       {0x0000, 0x0100} => Dimse.Command.Fields.n_create_rq(),
       {0x0000, 0x0110} => message_id,
-      {0x0000, 0x0800} => 0x0000
+      {0x0000, 0x0800} => data_set_type
     }
     |> maybe_put({0x0000, 0x1000}, Keyword.get(opts, :sop_instance_uid))
   end
@@ -35,21 +43,27 @@ defmodule Dimse.Scu.NCreate do
   @doc """
   Sends an N-CREATE-RQ with attribute data and waits for N-CREATE-RSP.
 
-  Returns `{:ok, status, data}` for successful or warning responses,
+  Returns `{:ok, status, sop_instance_uid, data}` for successful or warning responses,
   `{:error, {:status, status, data}}` for DIMSE failure statuses,
   or `{:error, reason}` for transport/protocol failures.
   """
   @spec send(pid(), String.t(), binary() | nil, keyword()) ::
-          {:ok, integer(), binary() | nil}
+          {:ok, integer(), String.t() | nil, binary() | nil}
           | {:error, {:status, integer(), binary() | nil} | term()}
   def send(assoc, sop_class_uid, data, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, 30_000)
     message_id = System.unique_integer([:positive]) &&& 0xFFFF
-    command_set = build_command_set(sop_class_uid, message_id, opts)
+
+    command_set =
+      build_command_set(
+        sop_class_uid,
+        message_id,
+        Keyword.put(opts, :data_set_present, not is_nil(data))
+      )
 
     case Dimse.Association.request(assoc, command_set, data, timeout) do
       {:ok, response, resp_data} ->
-        Dimse.Scu.normalize_n_response(response, resp_data)
+        normalize_response(response, resp_data)
 
       {:error, _} = err ->
         err
@@ -58,4 +72,17 @@ defmodule Dimse.Scu.NCreate do
 
   defp maybe_put(map, _tag, nil), do: map
   defp maybe_put(map, tag, value), do: Map.put(map, tag, value)
+
+  defp normalize_response(response, data) do
+    status = Dimse.Command.status(response)
+    sop_instance_uid = Map.get(response, {0x0000, 0x1000})
+
+    case Dimse.Command.Status.category(status) do
+      category when category in [:success, :warning] ->
+        {:ok, status, sop_instance_uid, data}
+
+      _ ->
+        {:error, {:status, status, data}}
+    end
+  end
 end

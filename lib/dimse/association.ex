@@ -22,7 +22,7 @@ defmodule Dimse.Association do
   alias Dimse.Command.Fields
 
   @implementation_uid "1.2.826.0.1.3680043.8.498.1"
-  @implementation_version "DIMSE_0.5.1"
+  @implementation_version "DIMSE_0.6.0"
 
   @default_transfer_syntaxes MapSet.new([
                                "1.2.840.10008.1.2",
@@ -176,25 +176,33 @@ defmodule Dimse.Association do
     called_ae = Keyword.get(opts, :called_ae)
     calling_ae = Keyword.get(opts, :calling_ae, state.local_ae_title)
     abstract_syntaxes = Keyword.get(opts, :abstract_syntaxes, [])
+    tls_opts = Keyword.get(opts, :tls)
 
     transfer_syntaxes =
       Keyword.get(opts, :transfer_syntaxes, MapSet.to_list(@default_transfer_syntaxes))
 
     timeout = Keyword.get(opts, :timeout, state.config.dimse_timeout)
 
-    case :gen_tcp.connect(
-           to_charlist(host),
-           port,
-           [:binary, active: :once, packet: :raw],
-           timeout
-         ) do
+    {connect_mod, transport, extra_opts} =
+      case tls_opts do
+        nil ->
+          {:gen_tcp, :gen_tcp, []}
+
+        tls when is_list(tls) ->
+          ssl_opts = Enum.map(tls, &normalize_tls_opt/1)
+          {:ssl, :ssl, ssl_opts}
+      end
+
+    socket_opts = [:binary, active: :once, packet: :raw] ++ extra_opts
+
+    case connect_mod.connect(to_charlist(host), port, socket_opts, timeout) do
       {:ok, socket} ->
         proposed_contexts = proposed_contexts(abstract_syntaxes)
 
         new_state = %{
           state
           | socket: socket,
-            transport: :gen_tcp,
+            transport: transport,
             local_ae_title: calling_ae,
             remote_ae_title: called_ae,
             proposed_contexts: proposed_contexts,
@@ -224,6 +232,14 @@ defmodule Dimse.Association do
         {:stop, reason}
     end
   end
+
+  # :ssl expects file paths as charlists
+  defp normalize_tls_opt({key, value})
+       when key in [:certfile, :keyfile, :cacertfile] and is_binary(value) do
+    {key, to_charlist(value)}
+  end
+
+  defp normalize_tls_opt(opt), do: opt
 
   @impl true
   def handle_call({:dimse_request, command_set, data}, from, %{phase: :established} = state) do
@@ -302,7 +318,8 @@ defmodule Dimse.Association do
   end
 
   @impl true
-  def handle_info({:tcp, socket, data}, %{socket: socket} = state) do
+  def handle_info({proto, socket, data}, %{socket: socket} = state)
+      when proto in [:tcp, :ssl] do
     # Accumulate buffer and process PDUs
     buffer = state.pdu_buffer <> data
     new_state = %{state | bytes_received: state.bytes_received + byte_size(data)}
@@ -317,11 +334,13 @@ defmodule Dimse.Association do
     end
   end
 
-  def handle_info({:tcp_closed, socket}, %{socket: socket} = state) do
+  def handle_info({closed, socket}, %{socket: socket} = state)
+      when closed in [:tcp_closed, :ssl_closed] do
     close_connection(state, :tcp_closed)
   end
 
-  def handle_info({:tcp_error, socket, reason}, %{socket: socket} = state) do
+  def handle_info({error, socket, reason}, %{socket: socket} = state)
+      when error in [:tcp_error, :ssl_error] do
     close_connection(state, {:tcp_error, reason})
   end
 
@@ -1063,6 +1082,7 @@ defmodule Dimse.Association do
 
     case state.transport do
       :gen_tcp -> :gen_tcp.send(state.socket, iodata)
+      :ssl -> :ssl.send(state.socket, iodata)
       transport -> transport.send(state.socket, iodata)
     end
 
@@ -1076,12 +1096,17 @@ defmodule Dimse.Association do
     :inet.setopts(socket, active: :once)
   end
 
+  defp reactivate_socket(%{transport: :ssl, socket: socket}) do
+    :ssl.setopts(socket, active: :once)
+  end
+
   defp reactivate_socket(%{transport: transport, socket: socket}) do
     transport.setopts(socket, active: :once)
   end
 
   defp close_socket(%{socket: nil}), do: :ok
   defp close_socket(%{transport: :gen_tcp, socket: socket}), do: :gen_tcp.close(socket)
+  defp close_socket(%{transport: :ssl, socket: socket}), do: :ssl.close(socket)
   defp close_socket(%{transport: transport, socket: socket}), do: transport.close(socket)
 
   defp close_connection(state, reason) do

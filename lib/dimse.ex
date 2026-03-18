@@ -28,7 +28,7 @@ defmodule Dimse do
       {:ok, status, data} = Dimse.n_get(assoc, sop_class_uid, sop_instance_uid)
       {:ok, status, data} = Dimse.n_set(assoc, sop_class_uid, sop_instance_uid, modifications)
       {:ok, status, data} = Dimse.n_action(assoc, sop_class_uid, sop_instance_uid, action_type_id, action_info)
-      {:ok, status, data} = Dimse.n_create(assoc, sop_class_uid, attributes)
+      {:ok, status, created_sop_instance_uid, data} = Dimse.n_create(assoc, sop_class_uid, attributes)
       {:ok, status, nil}  = Dimse.n_delete(assoc, sop_class_uid, sop_instance_uid)
       {:ok, status, data} = Dimse.n_event_report(assoc, sop_class_uid, sop_instance_uid, event_type_id, event_info)
 
@@ -62,6 +62,11 @@ defmodule Dimse do
     * `:max_associations` — max concurrent associations (default: `200`)
     * `:num_acceptors` — Ranch acceptor pool size (default: `10`)
     * `:max_pdu_length` — max PDU length in bytes (default: `16_384`)
+    * `:tls` — TLS options (keyword list). When present, the listener uses
+      TLS (`:ranch_ssl`) instead of plain TCP. Accepts standard `:ssl` options
+      such as `:certfile`, `:keyfile`, `:cacertfile`, `:verify`, and
+      `:fail_if_no_peer_cert`. PS3.15 Annex B recommends port 2762 for
+      DICOM-TLS.
 
   Returns `{:ok, listener_ref}` or `{:error, reason}`.
   """
@@ -89,6 +94,9 @@ defmodule Dimse do
     * `:transfer_syntaxes` — list of Transfer Syntax UIDs to propose
     * `:max_pdu_length` — max PDU length (default: `16_384`)
     * `:timeout` — connection timeout in ms (default: `30_000`)
+    * `:tls` — TLS options (keyword list). When present, the SCU connects
+      via TLS instead of plain TCP. Accepts standard `:ssl` options such as
+      `:cacertfile`, `:verify`, `:certfile`, and `:keyfile`.
 
   Returns `{:ok, association_pid}` or `{:error, reason}`.
   """
@@ -292,10 +300,10 @@ defmodule Dimse do
     * `:sop_instance_uid` — optional proposed SOP Instance UID
     * `:timeout` — response timeout in ms (default: `30_000`)
 
-  Returns `{:ok, status, data}` or `{:error, reason}`.
+  Returns `{:ok, status, created_sop_instance_uid, data}` or `{:error, reason}`.
   """
   @spec n_create(pid(), String.t(), binary() | nil, keyword()) ::
-          {:ok, integer(), binary() | nil}
+          {:ok, integer(), String.t() | nil, binary() | nil}
           | {:error, {:status, integer(), binary() | nil} | term()}
   def n_create(assoc, sop_class_uid, data, opts \\ []) do
     Dimse.Scu.NCreate.send(assoc, sop_class_uid, data, opts)

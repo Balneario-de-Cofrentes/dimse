@@ -27,7 +27,8 @@ one GenServer per association for fault isolation and natural backpressure.
 - **Max PDU length negotiation** -- with automatic message fragmentation
 - **Telemetry** -- `:telemetry`-based events for association lifecycle, PDU, and command metrics
 - **Built-in C-ECHO** -- SCP and SCU implementations for verification (DICOM "ping")
-- **3 runtime deps** -- `dicom` + `ranch` + `telemetry`
+- **TLS / DICOM Secure Transport** -- PS3.15 Annex B via OTP `:ssl` + Ranch SSL, mutual TLS support
+- **3 runtime deps** -- `dicom` + `ranch` + `telemetry` (`:ssl`/`:public_key` are OTP stdlib)
 
 ## Installation
 
@@ -36,7 +37,7 @@ Add `dimse` to your `mix.exs` dependencies:
 ```elixir
 def deps do
   [
-    {:dimse, "~> 0.5.1"}
+    {:dimse, "~> 0.6.0"}
   ]
 end
 ```
@@ -192,7 +193,8 @@ commitment_uid = "1.2.840.10008.1.20.1"
 {:ok, 0x0000, updated} = Dimse.n_set(assoc, sop_class_uid, sop_instance_uid, modifications)
 
 # Create a managed instance (N-CREATE)
-{:ok, 0x0000, created} = Dimse.n_create(assoc, sop_class_uid, attributes)
+{:ok, 0x0000, created_sop_instance_uid, created} =
+  Dimse.n_create(assoc, sop_class_uid, attributes)
 
 # Delete a managed instance (N-DELETE)
 {:ok, 0x0000, nil} = Dimse.n_delete(assoc, sop_class_uid, sop_instance_uid)
@@ -202,6 +204,65 @@ commitment_uid = "1.2.840.10008.1.20.1"
 
 :ok = Dimse.release(assoc)
 ```
+
+### TLS / DICOM Secure Transport (PS3.15 Annex B)
+
+```elixir
+# Start a TLS-enabled SCP listener
+{:ok, ref} = Dimse.start_listener(
+  port: 2762,
+  handler: MyApp.DicomHandler,
+  tls: [
+    certfile: "/path/to/server.pem",
+    keyfile: "/path/to/server_key.pem"
+  ]
+)
+
+# Connect an SCU over TLS
+{:ok, assoc} = Dimse.connect("192.168.1.10", 2762,
+  calling_ae: "MY_SCU",
+  called_ae: "REMOTE_SCP",
+  abstract_syntaxes: ["1.2.840.10008.1.1"],
+  tls: [
+    cacertfile: "/path/to/ca.pem",
+    verify: :verify_peer
+  ]
+)
+
+:ok = Dimse.echo(assoc)
+:ok = Dimse.release(assoc)
+```
+
+Mutual TLS (client certificate verification):
+
+```elixir
+# SCP requires client certificate
+{:ok, ref} = Dimse.start_listener(
+  port: 2762,
+  handler: MyApp.DicomHandler,
+  tls: [
+    certfile: "/path/to/server.pem",
+    keyfile: "/path/to/server_key.pem",
+    cacertfile: "/path/to/ca.pem",
+    verify: :verify_peer,
+    fail_if_no_peer_cert: true
+  ]
+)
+
+# SCU provides client certificate
+{:ok, assoc} = Dimse.connect("192.168.1.10", 2762,
+  calling_ae: "MY_SCU",
+  called_ae: "REMOTE_SCP",
+  tls: [
+    cacertfile: "/path/to/ca.pem",
+    certfile: "/path/to/client.pem",
+    keyfile: "/path/to/client_key.pem",
+    verify: :verify_peer
+  ]
+)
+```
+
+All standard OTP `:ssl` options are passed through — no opinionated wrappers.
 
 ## Architecture
 
@@ -279,7 +340,6 @@ All DIMSE-C (PS3.7 Ch.9) and DIMSE-N (PS3.7 Ch.10) services, both SCP and SCU:
 
 | Feature | Priority | Notes |
 |---------|----------|-------|
-| TLS (PS3.15 Annex B) | High | OTP `:ssl` + Ranch SSL transport |
 | SOP Class Extended Negotiation (0x56) | Medium | Role selection for SOP classes |
 | SOP Class Common Extended Negotiation (0x57) | Medium | Service class-wide negotiation |
 | User Identity Negotiation (0x58/0x59) | Medium | Username/password/Kerberos |
@@ -287,7 +347,7 @@ All DIMSE-C (PS3.7 Ch.9) and DIMSE-N (PS3.7 Ch.10) services, both SCP and SCU:
 
 ## Testing
 
-195 tests + 10 property-based tests, 0 failures.
+206 tests + 10 property-based tests, 0 failures.
 
 ```bash
 mix test              # Run all tests
@@ -297,7 +357,7 @@ mix format --check-formatted
 
 Property-based tests using [StreamData](https://hex.pm/packages/stream_data)
 verify PDU encode/decode roundtrips. Integration tests verify all 11 DIMSE
-services end-to-end over TCP.
+services end-to-end over TCP and TLS.
 
 ## Competitive Analysis
 
@@ -314,7 +374,7 @@ pynetdicom (Python), and fo-dicom (C#/.NET).
 | DIMSE-C services | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 | 2/5 |
 | DIMSE-N services | 6/6 | 6/6 | 6/6 | 6/6 | 6/6 | 0/6 |
 | SCP + SCU | Both | Both | Both | Both | Both | SCU only |
-| TLS | No | Yes | Yes | Yes | Yes | No |
+| TLS | Yes | Yes | Yes | Yes | Yes | No |
 | Extended negotiation | No | Yes | Yes | Yes | Yes | No |
 | Async ops window | No | Yes | Partial | Negotiation only | Yes | No |
 | Telemetry | `:telemetry` | Logging | Logging | Events | Events | -- |
@@ -332,7 +392,7 @@ pynetdicom (Python), and fo-dicom (C#/.NET).
 | All 7 PDU types | Yes | 6/7 | 6/7 |
 | ARTIM timer | Yes | No | No |
 | SCU client API | Full | Partial | None |
-| Tests | 205 (195 + 10 prop) | ~81 | ~25 |
+| Tests | 216 (206 + 10 prop) | ~81 | ~25 |
 | Status | Active | Sporadic | Inactive |
 
 ### Ecosystem Positioning

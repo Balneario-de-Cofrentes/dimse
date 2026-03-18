@@ -50,6 +50,40 @@ defmodule Dimse.AssociationTest do
     end
   end
 
+  describe "connect/3" do
+    test "returns an association with negotiated contexts already available" do
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: Dimse.Scp.Echo)
+      port = :ranch.get_port(ref)
+
+      assert {:ok, assoc} =
+               Dimse.connect("127.0.0.1", port,
+                 calling_ae: "TEST_SCU",
+                 called_ae: "DIMSE",
+                 abstract_syntaxes: [@verification_uid]
+               )
+
+      assert %{1 => {@verification_uid, _}} = Association.negotiated_contexts(assoc)
+      assert :ok = Dimse.echo(assoc, timeout: 1_000)
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+
+    test "returns rejection when no presentation contexts are accepted" do
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: Dimse.Scp.Echo)
+      port = :ranch.get_port(ref)
+
+      assert {:error, {:rejected, 1, 1, 1}} =
+               Dimse.connect("127.0.0.1", port,
+                 calling_ae: "TEST_SCU",
+                 called_ae: "DIMSE",
+                 abstract_syntaxes: [@ct_image_storage],
+                 timeout: 1_000
+               )
+
+      Dimse.stop_listener(ref)
+    end
+  end
+
   describe "release/2 when not established" do
     test "returns error when association is in idle phase" do
       {:ok, pid} = Association.start_link([])
