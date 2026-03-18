@@ -34,7 +34,7 @@ Add `dimse` to your `mix.exs` dependencies:
 ```elixir
 def deps do
   [
-    {:dimse, "~> 0.2.0"}
+    {:dimse, "~> 0.3.0"}
   ]
 end
 ```
@@ -108,6 +108,26 @@ end
 :ok = Dimse.release(assoc)
 ```
 
+### C-FIND SCU (Client)
+
+```elixir
+# Open an association proposing Study Root Query/Retrieve
+{:ok, assoc} = Dimse.connect("192.168.1.10", 11112,
+  calling_ae: "MY_SCU",
+  called_ae: "REMOTE_SCP",
+  abstract_syntaxes: ["1.2.840.10008.5.1.4.1.2.2.1"]
+)
+
+# Query for matching studies (query_data is an encoded DICOM identifier)
+{:ok, results} = Dimse.find(assoc, :study, query_data)
+
+# Or use the SOP Class UID directly
+{:ok, results} = Dimse.find(assoc, "1.2.840.10008.5.1.4.1.2.2.1", query_data)
+
+# Release the association
+:ok = Dimse.release(assoc)
+```
+
 ## Architecture
 
 ```
@@ -134,6 +154,7 @@ lib/dimse/
   scu.ex                -- SCU client API
   scu/echo.ex           -- C-ECHO SCU
   scu/store.ex          -- C-STORE SCU
+  scu/find.ex           -- C-FIND SCU
   telemetry.ex          -- Event definitions
 ```
 
@@ -150,7 +171,7 @@ lib/dimse/
 |---------|-----|-----|-------------|
 | C-ECHO  | Yes | Yes | Verification (connectivity test) |
 | C-STORE | Yes | Yes | Store DICOM instances |
-| C-FIND  | Dispatch | -- | Query patient/study/series/instance |
+| C-FIND  | Yes | Yes | Query patient/study/series/instance |
 | C-MOVE  | Dispatch | -- | Retrieve via push to third party |
 | C-GET   | Dispatch | -- | Retrieve on same association |
 
@@ -163,8 +184,8 @@ mix format --check-formatted
 ```
 
 Property-based tests using [StreamData](https://hex.pm/packages/stream_data)
-verify PDU encode/decode roundtrips. Integration tests verify C-ECHO and C-STORE
-SCP/SCU interoperability over TCP.
+verify PDU encode/decode roundtrips. Integration tests verify C-ECHO, C-STORE,
+and C-FIND SCP/SCU interoperability over TCP.
 
 ## Project Positioning
 
@@ -184,7 +205,7 @@ pure-Elixir DICOM toolkit:
 | Language | Elixir | Erlang | Elixir |
 | PDU decode/encode | All 7 types | 6/7 (no A-ASSOCIATE-RJ) | 6/7 (no A-ABORT) |
 | Association state machine | 5-phase + ARTIM timer | gen_statem (2 states) | GenServer (4 states) |
-| DIMSE-C services | C-ECHO, C-STORE + framework for FIND/MOVE/GET | C-ECHO, C-STORE | C-ECHO, C-STORE, partial C-FIND |
+| DIMSE-C services | C-ECHO, C-STORE, C-FIND + framework for MOVE/GET | C-ECHO, C-STORE | C-ECHO, C-STORE, partial C-FIND |
 | SCP behaviour | `@behaviour` with 5 callbacks | Hardcoded routing | Event handler callbacks |
 | SCU client | Full API (open/release/abort/echo) | gen_statem sender | No SCU |
 | Max PDU fragmentation | Yes (encode + reassembly) | Yes (sender chunking) | Parsed, not enforced |
@@ -192,7 +213,7 @@ pure-Elixir DICOM toolkit:
 | Telemetry | 6 event types | Logger only | Logger only |
 | Transfer syntaxes | IVR LE, EVR LE | 3 uncompressed | 13 registered (3 decoded) |
 | Property tests | StreamData (10 properties) | proper (extensive) | No |
-| Tests | 122 (112 tests + 10 properties) | ~81 eunit + proper | ~25 |
+| Tests | 136 (126 tests + 10 properties) | ~81 eunit + proper | ~25 |
 | Runtime deps | 3 (dicom, ranch, telemetry) | 2 (ranch, recon) | 0 (stdlib only) |
 | Source LOC | ~2,700 | ~14,500 | ~2,600 (+ 26K tag dict) |
 | Maintained | Active | Active | Active |

@@ -22,7 +22,7 @@ defmodule Dimse.Association do
   alias Dimse.Command.Fields
 
   @implementation_uid "1.2.826.0.1.3680043.8.498.1"
-  @implementation_version "DIMSE_0.2.0"
+  @implementation_version "DIMSE_0.3.0"
 
   @default_transfer_syntaxes MapSet.new([
                                "1.2.840.10008.1.2",
@@ -50,6 +50,28 @@ defmodule Dimse.Association do
           {:ok, map(), binary() | nil} | {:error, term()}
   def request(pid, command_set, data \\ nil, timeout \\ 30_000) do
     GenServer.call(pid, {:dimse_request, command_set, data}, timeout)
+  end
+
+  @doc """
+  Sends a DIMSE command that expects multiple responses (C-FIND).
+
+  Accumulates all Pending responses and returns the collected data sets
+  when the final Success/Error response arrives.
+
+  Returns `{:ok, final_command, [binary()]}` or `{:error, term()}`.
+  """
+  @spec find_request(pid(), map(), binary(), timeout()) ::
+          {:ok, map(), [binary()]} | {:error, term()}
+  def find_request(pid, command_set, data, timeout \\ 30_000) do
+    GenServer.call(pid, {:dimse_find_request, command_set, data}, timeout)
+  end
+
+  @doc """
+  Sends a C-CANCEL-RQ to cancel a pending C-FIND operation.
+  """
+  @spec cancel(pid(), integer()) :: :ok
+  def cancel(pid, message_id) do
+    GenServer.cast(pid, {:cancel_find, message_id})
   end
 
   @doc """
@@ -186,17 +208,19 @@ defmodule Dimse.Association do
 
   @impl true
   def handle_call({:dimse_request, command_set, data}, from, %{phase: :established} = state) do
-    # Find a context for the SOP class
-    sop_class = Map.get(command_set, {0x0000, 0x0002})
-    context_id = find_context_id(state.negotiated_contexts, sop_class)
-
-    if context_id do
-      pdus = Message.fragment(command_set, data, context_id, state.max_pdu_length)
-      Enum.each(pdus, &send_pdu(state, &1))
+    send_dimse_request(command_set, data, state, fn ->
       {:noreply, %{state | pending_request: from}}
-    else
-      {:reply, {:error, :no_accepted_context}, state}
-    end
+    end)
+  end
+
+  def handle_call(
+        {:dimse_find_request, command_set, data},
+        from,
+        %{phase: :established} = state
+      ) do
+    send_dimse_request(command_set, data, state, fn ->
+      {:noreply, %{state | pending_request: from, collecting_results: true, pending_results: []}}
+    end)
   end
 
   def handle_call(:release, from, %{phase: :established} = state) do
@@ -215,6 +239,30 @@ defmodule Dimse.Association do
   def handle_cast(:abort, state) do
     if state.socket, do: send_pdu(state, %Pdu.Abort{source: 0, reason: 0})
     close_connection(state, :aborted)
+  end
+
+  def handle_cast({:cancel_find, message_id}, %{phase: :established} = state) do
+    # Build C-CANCEL-RQ command set (PS3.7 Section 9.3.2.3)
+    cancel_command = %{
+      {0x0000, 0x0100} => Fields.c_cancel_rq(),
+      {0x0000, 0x0120} => message_id,
+      {0x0000, 0x0800} => 0x0101
+    }
+
+    # Use first available negotiated context, fall back to 1
+    context_id =
+      state.negotiated_contexts
+      |> Map.keys()
+      |> List.first(1)
+
+    pdus = Message.fragment(cancel_command, nil, context_id, state.max_pdu_length)
+    Enum.each(pdus, &send_pdu(state, &1))
+
+    {:noreply, state}
+  end
+
+  def handle_cast({:cancel_find, _message_id}, state) do
+    {:noreply, state}
   end
 
   @impl true
@@ -459,18 +507,59 @@ defmodule Dimse.Association do
     command_field = Command.command_field(message.command)
 
     cond do
-      # Response to our SCU request
-      Fields.response?(command_field) and state.pending_request != nil ->
-        GenServer.reply(state.pending_request, {:ok, message.command, message.data})
-        new_state = %{state | pending_request: nil}
-        process_pdv_items(remaining_pdvs, new_state)
+      Fields.response?(command_field) ->
+        handle_response(message, state, remaining_pdvs)
 
-      # Incoming SCP request
       Fields.request?(command_field) ->
         dispatch_scp_request(message, state, remaining_pdvs)
 
       true ->
         {:stop, :unexpected_command, state}
+    end
+  end
+
+  defp handle_response(_message, %{pending_request: nil} = state, remaining_pdvs) do
+    # Late response with no pending request -- ignore (e.g., after C-CANCEL)
+    process_pdv_items(remaining_pdvs, state)
+  end
+
+  defp handle_response(message, %{collecting_results: true} = state, remaining_pdvs) do
+    # Multi-response collection (C-FIND)
+    handle_multi_response(message, state, remaining_pdvs)
+  end
+
+  defp handle_response(message, state, remaining_pdvs) do
+    # Single response to our SCU request
+    GenServer.reply(state.pending_request, {:ok, message.command, message.data})
+    process_pdv_items(remaining_pdvs, %{state | pending_request: nil})
+  end
+
+  defp handle_multi_response(message, state, remaining_pdvs) do
+    status = Command.status(message.command)
+
+    case Command.Status.category(status) do
+      :pending ->
+        # Accumulate the matching data set
+        new_results =
+          if message.data,
+            do: [message.data | state.pending_results],
+            else: state.pending_results
+
+        process_pdv_items(remaining_pdvs, %{state | pending_results: new_results})
+
+      _ ->
+        # Final response (success, cancel, or failure)
+        results = Enum.reverse(state.pending_results)
+        GenServer.reply(state.pending_request, {:ok, message.command, results})
+
+        new_state = %{
+          state
+          | pending_request: nil,
+            collecting_results: false,
+            pending_results: []
+        }
+
+        process_pdv_items(remaining_pdvs, new_state)
     end
   end
 
@@ -486,7 +575,7 @@ defmodule Dimse.Association do
       message_id: message_id
     })
 
-    {status, response_data} =
+    result =
       case command_field do
         0x0030 ->
           # C-ECHO-RQ
@@ -509,6 +598,12 @@ defmodule Dimse.Association do
             {:error, status, _msg} -> {status, nil}
           end
 
+        0x0FFF ->
+          # C-CANCEL-RQ (PS3.7 §9.3.2.3) — cancels a pending C-FIND/C-MOVE/C-GET.
+          # With synchronous handlers, if we're processing this, the operation
+          # already completed. No separate response is sent for C-CANCEL.
+          :no_response
+
         _ ->
           # Unsupported command
           {0xC000, nil}
@@ -516,29 +611,44 @@ defmodule Dimse.Association do
 
     duration = System.monotonic_time(:millisecond) - start_time
 
-    Telemetry.emit(:command_stop, %{duration: duration}, %{
-      association_id: state.association_id,
-      command_field: command_field,
-      status: status
-    })
+    # C-CANCEL has no response; skip response for :no_response
+    case result do
+      :no_response ->
+        Telemetry.emit(:command_stop, %{duration: duration}, %{
+          association_id: state.association_id,
+          command_field: command_field,
+          status: :cancelled
+        })
 
-    # Send response
-    response_field = Bitwise.bor(command_field, 0x8000)
+      {status, response_data} ->
+        Telemetry.emit(:command_stop, %{duration: duration}, %{
+          association_id: state.association_id,
+          command_field: command_field,
+          status: status
+        })
 
-    response_command =
-      %{
-        {0x0000, 0x0002} => Command.affected_sop_class_uid(message.command) || "",
-        {0x0000, 0x0100} => response_field,
-        {0x0000, 0x0120} => message_id,
-        {0x0000, 0x0800} => 0x0101,
-        {0x0000, 0x0900} => status
-      }
-      |> maybe_put_instance_uid(command_field, message.command)
+        response_field = Bitwise.bor(command_field, 0x8000)
 
-    pdus =
-      Message.fragment(response_command, response_data, message.context_id, state.max_pdu_length)
+        response_command =
+          %{
+            {0x0000, 0x0002} => Command.affected_sop_class_uid(message.command) || "",
+            {0x0000, 0x0100} => response_field,
+            {0x0000, 0x0120} => message_id,
+            {0x0000, 0x0800} => 0x0101,
+            {0x0000, 0x0900} => status
+          }
+          |> maybe_put_instance_uid(command_field, message.command)
 
-    Enum.each(pdus, &send_pdu(state, &1))
+        pdus =
+          Message.fragment(
+            response_command,
+            response_data,
+            message.context_id,
+            state.max_pdu_length
+          )
+
+        Enum.each(pdus, &send_pdu(state, &1))
+    end
 
     process_pdv_items(remaining_pdvs, state)
   end
@@ -649,6 +759,19 @@ defmodule Dimse.Association do
       handler.supported_abstract_syntaxes() |> MapSet.new()
     else
       MapSet.new(["1.2.840.10008.1.1"])
+    end
+  end
+
+  defp send_dimse_request(command_set, data, state, on_sent) do
+    sop_class = Map.get(command_set, {0x0000, 0x0002})
+    context_id = find_context_id(state.negotiated_contexts, sop_class)
+
+    if context_id do
+      pdus = Message.fragment(command_set, data, context_id, state.max_pdu_length)
+      Enum.each(pdus, &send_pdu(state, &1))
+      on_sent.()
+    else
+      {:reply, {:error, :no_accepted_context}, state}
     end
   end
 

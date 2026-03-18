@@ -17,7 +17,8 @@ defmodule Dimse do
       {:ok, assoc} = Dimse.connect("192.168.1.10", 11112, calling_ae: "MY_SCU", called_ae: "REMOTE_SCP")
       :ok = Dimse.echo(assoc)
       :ok = Dimse.store(assoc, sop_class_uid, sop_instance_uid, data_set)
-      {:ok, results} = Dimse.find(assoc, :study, query)
+      {:ok, results} = Dimse.find(assoc, :study, query_data, timeout: 30_000)
+      :ok = Dimse.cancel(assoc, message_id)
       :ok = Dimse.move(assoc, :study, query, dest_ae: "DEST_AE")
       {:ok, data_sets} = Dimse.get(assoc, :study, query)
       :ok = Dimse.release(assoc)
@@ -109,9 +110,42 @@ defmodule Dimse do
     Dimse.Scu.Store.send(assoc, sop_class_uid, sop_instance_uid, data, opts)
   end
 
-  @doc "Sends a C-FIND request and returns matching results."
-  @spec find(pid(), atom(), term()) :: {:ok, [term()]} | {:error, term()}
-  def find(_assoc, _level, _query), do: {:error, :not_implemented}
+  @doc """
+  Sends a C-FIND request and returns matching data sets.
+
+  ## Parameters
+
+    * `assoc` — association pid from `Dimse.connect/3`
+    * `sop_class_or_level` — SOP Class UID string, or query level atom
+      (`:patient`, `:study`, `:worklist`)
+    * `query_data` — encoded query identifier data set
+
+  ## Options
+
+    * `:priority` — request priority (default: `0x0000` medium)
+    * `:timeout` — response timeout in ms (default: `30_000`)
+  """
+  @spec find(pid(), String.t() | atom(), binary(), keyword()) ::
+          {:ok, [binary()]} | {:error, term()}
+  def find(assoc, sop_class_or_level, query_data, opts \\ []) do
+    sop_class_uid = resolve_find_sop_class(sop_class_or_level)
+
+    if sop_class_uid do
+      Dimse.Scu.Find.query(assoc, sop_class_uid, query_data, opts)
+    else
+      {:error, {:unknown_query_level, sop_class_or_level}}
+    end
+  end
+
+  @doc """
+  Sends a C-CANCEL-RQ to cancel a pending C-FIND operation.
+
+  The `message_id` should be the MessageID of the original C-FIND-RQ.
+  """
+  @spec cancel(pid(), integer()) :: :ok
+  def cancel(assoc, message_id) do
+    Dimse.Association.cancel(assoc, message_id)
+  end
 
   @doc "Sends a C-MOVE request to retrieve studies to a destination AE."
   @spec move(pid(), atom(), term(), keyword()) :: :ok | {:error, term()}
@@ -120,6 +154,11 @@ defmodule Dimse do
   @doc "Sends a C-GET request to retrieve studies on the same association."
   @spec get(pid(), atom(), term()) :: {:ok, [term()]} | {:error, term()}
   def get(_assoc, _level, _query), do: {:error, :not_implemented}
+
+  defp resolve_find_sop_class(level) when is_atom(level),
+    do: Dimse.Scu.Find.sop_class_uid(level)
+
+  defp resolve_find_sop_class(uid) when is_binary(uid), do: uid
 
   @doc "Sends an A-RELEASE-RQ to gracefully close the association."
   @spec release(pid(), timeout()) :: :ok | {:error, term()}

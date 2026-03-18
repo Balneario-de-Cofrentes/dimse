@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-03-18
+
+### Added
+
+- C-FIND SCU (`Dimse.Scu.Find`) — query DICOM data sets from remote SCPs
+- `Dimse.find/4` public API with query level convenience atoms (`:patient`, `:study`, `:worklist`)
+- `Dimse.cancel/2` for C-CANCEL-RQ (PS3.7 §9.3.2.3)
+- Multi-response handling in Association for Pending + Success response sequences
+- `Association.find_request/4` for multi-response DIMSE commands
+- Query SOP Class UID mapping (`Dimse.Scu.Find.sop_class_uid/1`)
+- C-FIND integration tests (basic, empty, many results, error, mixed operations, cancel)
+- Late response tolerance — SCU ignores responses after operation completes
+
+### Changed
+
+- SCP C-CANCEL-RQ handling — no longer sends erroneous response to C-CANCEL
+
 ## [0.2.0] - 2026-03-18
 
 ### Added
@@ -40,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Telemetry event definitions for association lifecycle and PDU I/O
 - CI workflow with Elixir 1.16/1.17/1.18 matrix
 
-[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Balneario-de-Cofrentes/dimse/releases/tag/v0.1.0

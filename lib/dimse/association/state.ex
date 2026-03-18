@@ -30,7 +30,9 @@ defmodule Dimse.Association.State do
           config: Dimse.Association.Config.t() | nil,
           pending_request: GenServer.from() | nil,
           pending_release: GenServer.from() | nil,
-          artim_timer: reference() | nil
+          artim_timer: reference() | nil,
+          collecting_results: boolean(),
+          pending_results: [binary()]
         }
 
   defstruct phase: :idle,
@@ -52,5 +54,7 @@ defmodule Dimse.Association.State do
             config: nil,
             pending_request: nil,
             pending_release: nil,
-            artim_timer: nil
+            artim_timer: nil,
+            collecting_results: false,
+            pending_results: []
 end

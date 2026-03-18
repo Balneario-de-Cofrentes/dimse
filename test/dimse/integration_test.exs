@@ -4,6 +4,7 @@ defmodule Dimse.IntegrationTest do
   @moduletag :integration
 
   @ct_image_storage "1.2.840.10008.5.1.4.1.1.2"
+  @study_root_find "1.2.840.10008.5.1.4.1.2.2.1"
 
   defp wait_for_established(assoc, timeout \\ 2_000) do
     deadline = System.monotonic_time(:millisecond) + timeout
@@ -217,6 +218,225 @@ defmodule Dimse.IntegrationTest do
     end
   end
 
+  describe "C-FIND end-to-end" do
+    test "SCU receives matching results from SCP" do
+      test_pid = self()
+      result1 = :crypto.strong_rand_bytes(64)
+      result2 = :crypto.strong_rand_bytes(96)
+      handler = find_handler(test_pid, [result1, result2])
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "FIND_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@study_root_find]
+        )
+
+      wait_for_established(assoc)
+
+      query_data = :crypto.strong_rand_bytes(32)
+      assert {:ok, results} = Dimse.find(assoc, @study_root_find, query_data, timeout: 5_000)
+
+      assert length(results) == 2
+      assert Enum.at(results, 0) == result1
+      assert Enum.at(results, 1) == result2
+
+      assert_receive {:find_query, ^query_data}, 2_000
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+
+    test "empty results return empty list" do
+      test_pid = self()
+      handler = find_handler(test_pid, [])
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "FIND_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@study_root_find]
+        )
+
+      wait_for_established(assoc)
+
+      assert {:ok, []} = Dimse.find(assoc, @study_root_find, <<>>, timeout: 5_000)
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+
+    test "many results (10)" do
+      test_pid = self()
+      results = for _ <- 1..10, do: :crypto.strong_rand_bytes(48)
+      handler = find_handler(test_pid, results)
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "FIND_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@study_root_find]
+        )
+
+      wait_for_established(assoc)
+
+      assert {:ok, received} = Dimse.find(assoc, @study_root_find, <<>>, timeout: 5_000)
+      assert length(received) == 10
+      assert received == results
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+
+    test "handler error returns failure" do
+      test_pid = self()
+      handler = find_error_handler(test_pid)
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "FIND_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@study_root_find]
+        )
+
+      wait_for_established(assoc)
+
+      assert {:error, {:status, status}} =
+               Dimse.find(assoc, @study_root_find, <<>>, timeout: 5_000)
+
+      assert status == 0xA700
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+
+    test "find with echo on same association" do
+      test_pid = self()
+      result1 = :crypto.strong_rand_bytes(64)
+      handler = find_echo_handler(test_pid, [result1])
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "FIND_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: ["1.2.840.10008.1.1", @study_root_find]
+        )
+
+      wait_for_established(assoc)
+
+      assert :ok = Dimse.echo(assoc, timeout: 5_000)
+      assert {:ok, [^result1]} = Dimse.find(assoc, @study_root_find, <<>>, timeout: 5_000)
+      assert :ok = Dimse.echo(assoc, timeout: 5_000)
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+
+    test "multiple find requests on same association" do
+      test_pid = self()
+      results1 = [:crypto.strong_rand_bytes(32)]
+      results2 = [:crypto.strong_rand_bytes(48), :crypto.strong_rand_bytes(48)]
+      handler = find_handler(test_pid, results1, results2)
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "FIND_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@study_root_find]
+        )
+
+      wait_for_established(assoc)
+
+      assert {:ok, received1} = Dimse.find(assoc, @study_root_find, <<>>, timeout: 5_000)
+      assert received1 == results1
+
+      assert {:ok, received2} = Dimse.find(assoc, @study_root_find, <<>>, timeout: 5_000)
+      assert received2 == results2
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+
+    test "find with query level convenience atom" do
+      test_pid = self()
+      result1 = :crypto.strong_rand_bytes(64)
+      handler = find_handler(test_pid, [result1])
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "FIND_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@study_root_find]
+        )
+
+      wait_for_established(assoc)
+
+      assert {:ok, [^result1]} = Dimse.find(assoc, :study, <<>>, timeout: 5_000)
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+
+    test "C-CANCEL is sent and SCP handles it gracefully" do
+      test_pid = self()
+      handler = find_slow_handler(test_pid)
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "FIND_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@study_root_find]
+        )
+
+      wait_for_established(assoc)
+
+      # Start find in a task, then cancel it
+      find_task =
+        Task.async(fn ->
+          Dimse.find(assoc, @study_root_find, <<>>, timeout: 10_000)
+        end)
+
+      # Wait for the handler to start processing
+      assert_receive {:find_started, message_id}, 2_000
+
+      # Send C-CANCEL — with synchronous handlers, the find will complete
+      # but the cancel should not crash the association
+      :ok = Dimse.cancel(assoc, message_id)
+
+      # The find completes with all results (handler is synchronous)
+      assert {:ok, results} = Task.await(find_task, 10_000)
+      assert is_list(results)
+
+      # Association should still be usable after cancel
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+  end
+
   # --- Test handler factories ---
 
   defp store_handler(test_pid) do
@@ -281,6 +501,173 @@ defmodule Dimse.IntegrationTest do
 
         @impl true
         def handle_find(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_move(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_get(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+      end,
+      Macro.Env.location(__ENV__)
+    )
+
+    mod
+  end
+
+  defp find_handler(test_pid, results, results2 \\ nil) do
+    mod = :"Dimse.Test.FindHandler.#{System.unique_integer([:positive])}"
+
+    Module.create(
+      mod,
+      quote do
+        @behaviour Dimse.Handler
+
+        @impl true
+        def supported_abstract_syntaxes do
+          ["1.2.840.10008.5.1.4.1.2.2.1"]
+        end
+
+        @impl true
+        def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+        @impl true
+        def handle_store(_command, _data, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_find(_command, query, _state) do
+          send(unquote(test_pid), {:find_query, query})
+
+          # Support alternating results for sequential find tests
+          case Process.get(:find_call_count, 0) do
+            0 ->
+              Process.put(:find_call_count, 1)
+              {:ok, unquote(Macro.escape(results))}
+
+            _ ->
+              results2 = unquote(Macro.escape(results2))
+              if results2, do: {:ok, results2}, else: {:ok, unquote(Macro.escape(results))}
+          end
+        end
+
+        @impl true
+        def handle_move(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_get(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+      end,
+      Macro.Env.location(__ENV__)
+    )
+
+    mod
+  end
+
+  defp find_error_handler(test_pid) do
+    mod = :"Dimse.Test.FindErrorHandler.#{System.unique_integer([:positive])}"
+
+    Module.create(
+      mod,
+      quote do
+        @behaviour Dimse.Handler
+
+        @impl true
+        def supported_abstract_syntaxes do
+          ["1.2.840.10008.5.1.4.1.2.2.1"]
+        end
+
+        @impl true
+        def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+        @impl true
+        def handle_store(_command, _data, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_find(_command, _query, _state) do
+          send(unquote(test_pid), :find_error_called)
+          {:error, 0xA700, "out of resources"}
+        end
+
+        @impl true
+        def handle_move(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_get(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+      end,
+      Macro.Env.location(__ENV__)
+    )
+
+    mod
+  end
+
+  defp find_echo_handler(test_pid, results) do
+    mod = :"Dimse.Test.FindEchoHandler.#{System.unique_integer([:positive])}"
+
+    Module.create(
+      mod,
+      quote do
+        @behaviour Dimse.Handler
+
+        @impl true
+        def supported_abstract_syntaxes do
+          ["1.2.840.10008.1.1", "1.2.840.10008.5.1.4.1.2.2.1"]
+        end
+
+        @impl true
+        def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+        @impl true
+        def handle_store(_command, _data, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_find(_command, _query, _state) do
+          send(unquote(test_pid), :find_called)
+          {:ok, unquote(Macro.escape(results))}
+        end
+
+        @impl true
+        def handle_move(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_get(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+      end,
+      Macro.Env.location(__ENV__)
+    )
+
+    mod
+  end
+
+  defp find_slow_handler(test_pid) do
+    mod = :"Dimse.Test.FindSlowHandler.#{System.unique_integer([:positive])}"
+
+    Module.create(
+      mod,
+      quote do
+        @behaviour Dimse.Handler
+
+        @impl true
+        def supported_abstract_syntaxes do
+          ["1.2.840.10008.5.1.4.1.2.2.1"]
+        end
+
+        @impl true
+        def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+        @impl true
+        def handle_store(_command, _data, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_find(command, _query, _state) do
+          message_id = command[{0x0000, 0x0110}] || 0
+          send(unquote(test_pid), {:find_started, message_id})
+
+          # Generate many results slowly so cancel has time to arrive
+          results =
+            for i <- 1..100 do
+              Process.sleep(10)
+              :crypto.strong_rand_bytes(32)
+            end
+
+          {:ok, results}
+        end
 
         @impl true
         def handle_move(_command, _query, _state), do: {:error, 0xC000, "not supported"}
