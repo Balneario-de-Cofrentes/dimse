@@ -50,8 +50,20 @@ mitigation within 7 days for critical issues.
   use TLS or a VPN for transport security. Users are responsible for HIPAA/GDPR
   compliance.
 
+### TLS / DICOM Secure Transport (v0.6.0+)
+
+v0.6.0 added native TLS support via OTP `:ssl` and Ranch SSL (PS3.15 Annex B).
+TLS mitigates plaintext DIMSE traffic exposure and, with mutual TLS (mTLS),
+client AE title spoofing. See the README for usage examples.
+
+- `start_listener/1` accepts `:tls` option for `ranch_ssl` transport
+- `connect/3` accepts `:tls` option to connect via `:ssl`
+- mTLS: SCP can require client certificates via `:verify` / `:fail_if_no_peer_cert`
+
 ## Supported Versions
 
-| Version | Supported |
-|---------|-----------|
-| 0.1.x   | Yes       |
+| Version | Supported          |
+|---------|--------------------|
+| 0.6.x   | Yes                |
+| 0.5.x   | Yes                |
+| < 0.5   | No                 |

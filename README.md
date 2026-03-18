@@ -37,7 +37,7 @@ Add `dimse` to your `mix.exs` dependencies:
 ```elixir
 def deps do
   [
-    {:dimse, "~> 0.6.0"}
+    {:dimse, "~> 0.6"}
   ]
 end
 ```
@@ -358,7 +358,7 @@ All DIMSE-C (PS3.7 Ch.9) and DIMSE-N (PS3.7 Ch.10) services, both SCP and SCU:
 
 ## Testing
 
-206 tests + 10 property-based tests, 0 failures.
+252 tests (242 unit + 10 property-based), 0 failures.
 
 ```bash
 mix test              # Run all tests

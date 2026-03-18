@@ -5,7 +5,7 @@ Instructions for AI coding assistants working with this codebase.
 ## Project Overview
 
 Pure Elixir DICOM DIMSE networking library. 3 runtime dependencies (dicom, ranch, telemetry).
-Implements the DICOM Upper Layer Protocol (PS3.8) and DIMSE-C message services (PS3.7)
+Implements the DICOM Upper Layer Protocol (PS3.8) and DIMSE-C and DIMSE-N message services (PS3.7 Chapters 9-10)
 for building SCP (server) and SCU (client) DICOM applications on the BEAM.
 
 ## Build and Test

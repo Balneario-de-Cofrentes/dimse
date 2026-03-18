@@ -31,12 +31,12 @@ mix docs                         # Generate documentation
 
 ## Submitting Changes
 
-1. Fork the repository and create a branch from `master`
+1. Fork the repository and create a branch from `main`
 2. Make your changes
 3. Ensure all tests pass: `mix test`
 4. Ensure code is formatted: `mix format --check-formatted`
-5. Ensure coverage does not regress materially in the areas you changed
-6. Open a pull request against `master`
+5. Ensure coverage does not regress below 90%: `mix test --cover`
+6. Open a pull request against `main`
 
 ### Pull Request Guidelines
 
@@ -75,6 +75,9 @@ If you are new to DICOM networking, these concepts are essential:
 - **Presentation Context** -- the pairing of an Abstract Syntax (SOP Class) with
   one or more Transfer Syntaxes, negotiated during association setup
 - **DIMSE-C** -- composite services: C-STORE, C-FIND, C-MOVE, C-GET, C-ECHO
+  (PS3.7 Chapter 9)
+- **DIMSE-N** -- notification/management services: N-EVENT-REPORT, N-GET, N-SET,
+  N-ACTION, N-CREATE, N-DELETE (PS3.7 Chapter 10)
 
 The [DICOM standard](https://www.dicomstandard.org/current) is freely available.
 Parts 7 and 8 are most relevant to this library.
