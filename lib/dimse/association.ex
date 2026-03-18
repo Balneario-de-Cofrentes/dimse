@@ -22,7 +22,7 @@ defmodule Dimse.Association do
   alias Dimse.Command.Fields
 
   @implementation_uid "1.2.826.0.1.3680043.8.498.1"
-  @implementation_version "DIMSE_0.5.0"
+  @implementation_version "DIMSE_0.5.1"
 
   @default_transfer_syntaxes MapSet.new([
                                "1.2.840.10008.1.2",
@@ -1209,17 +1209,37 @@ defmodule Dimse.Association do
           3 -> apply(handler, callback, [message.command, message.data, state])
         end
 
-      extra_tags = build_n_response_extra_tags(message.command)
-
-      case result do
-        {:ok, status, data} -> {status, data, extra_tags}
-        {:ok, status} -> {status, nil, extra_tags}
-        {:error, status, _msg} -> {status, nil, extra_tags}
-      end
+      normalize_n_dispatch_result(callback, result, message.command)
     else
       # No Such SOP Class (PS3.7 Annex C)
       {0x0112, nil, %{}}
     end
+  end
+
+  defp normalize_n_dispatch_result(
+         :handle_n_create,
+         {:ok, status, sop_instance_uid, data},
+         command
+       )
+       when is_binary(sop_instance_uid) do
+    extra_tags =
+      command
+      |> build_n_response_extra_tags()
+      |> Map.put({0x0000, 0x1000}, sop_instance_uid)
+
+    {status, data, extra_tags}
+  end
+
+  defp normalize_n_dispatch_result(_callback, {:ok, status, data}, command) do
+    {status, data, build_n_response_extra_tags(command)}
+  end
+
+  defp normalize_n_dispatch_result(_callback, {:ok, status}, command) do
+    {status, nil, build_n_response_extra_tags(command)}
+  end
+
+  defp normalize_n_dispatch_result(_callback, {:error, status, _msg}, _command) do
+    {status, nil, %{}}
   end
 
   defp build_n_response_extra_tags(command) do

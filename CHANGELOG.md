@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-03-18
+
+### Fixed
+
+- `N-GET` now correctly encodes and decodes multi-valued Attribute Identifier Lists instead of crashing on a documented list input
+- `N-CREATE` SCP handlers can now return the created SOP Instance UID for inclusion in the response command
+- DIMSE-N SCU helpers now return explicit error tuples for DIMSE failure statuses instead of reporting them as `{:ok, status, data}`
+
 ## [0.5.0] - 2026-03-18
 
 ### Added

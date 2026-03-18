@@ -75,6 +75,14 @@ defmodule Dimse.CommandTest do
       # CommandGroupLength is re-computed, so just verify encode succeeds
       assert is_binary(binary)
     end
+
+    test "encodes and decodes AT lists" do
+      cmd = %{{0x0000, 0x1005} => [{0x0008, 0x0018}, {0x0010, 0x0010}]}
+
+      assert {:ok, binary} = Command.encode(cmd)
+      assert {:ok, decoded} = Command.decode(binary)
+      assert decoded[{0x0000, 0x1005}] == [{0x0008, 0x0018}, {0x0010, 0x0010}]
+    end
   end
 
   describe "decode/1" do

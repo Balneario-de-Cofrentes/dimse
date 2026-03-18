@@ -45,10 +45,13 @@ defmodule Dimse.Scu.NGet do
   @doc """
   Sends an N-GET-RQ and waits for N-GET-RSP.
 
-  Returns `{:ok, status, data}` on success, `{:error, reason}` on failure.
+  Returns `{:ok, status, data}` for successful or warning responses,
+  `{:error, {:status, status, data}}` for DIMSE failure statuses,
+  or `{:error, reason}` for transport/protocol failures.
   """
   @spec query(pid(), String.t(), String.t(), keyword()) ::
-          {:ok, integer(), binary() | nil} | {:error, term()}
+          {:ok, integer(), binary() | nil}
+          | {:error, {:status, integer(), binary() | nil} | term()}
   def query(assoc, sop_class_uid, sop_instance_uid, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, 30_000)
     message_id = System.unique_integer([:positive]) &&& 0xFFFF
@@ -56,7 +59,7 @@ defmodule Dimse.Scu.NGet do
 
     case Dimse.Association.request(assoc, command_set, nil, timeout) do
       {:ok, response, data} ->
-        {:ok, Dimse.Command.status(response), data}
+        Dimse.Scu.normalize_n_response(response, data)
 
       {:error, _} = err ->
         err

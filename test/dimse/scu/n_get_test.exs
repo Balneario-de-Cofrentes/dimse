@@ -4,6 +4,22 @@ defmodule Dimse.Scu.NGetTest do
   alias Dimse.Scu.NGet
   alias Dimse.Command.Fields
 
+  defmodule FakeAssociation do
+    use GenServer
+
+    def start_link(response) do
+      GenServer.start_link(__MODULE__, response)
+    end
+
+    @impl true
+    def init(response), do: {:ok, response}
+
+    @impl true
+    def handle_call({:dimse_request, _command_set, _data}, _from, response) do
+      {:reply, response, response}
+    end
+  end
+
   describe "build_command_set/3" do
     test "uses RequestedSOPClassUID (0000,0003)" do
       sop_class = "1.2.840.10008.5.1.4.1.1.1"
@@ -47,6 +63,15 @@ defmodule Dimse.Scu.NGetTest do
     test "omits AttributeIdentifierList when not provided" do
       cmd = NGet.build_command_set("1.2.3", "1.2.3.4", 1)
       refute Map.has_key?(cmd, {0x0000, 0x1005})
+    end
+  end
+
+  describe "query/4" do
+    test "returns error tuple for DIMSE failure statuses" do
+      {:ok, assoc} =
+        FakeAssociation.start_link({:ok, %{{0x0000, 0x0900} => 0xC000}, nil})
+
+      assert {:error, {:status, 0xC000, nil}} = NGet.query(assoc, "1.2.3", "1.2.3.4")
     end
   end
 end

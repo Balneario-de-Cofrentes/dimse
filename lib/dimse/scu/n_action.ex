@@ -32,10 +32,13 @@ defmodule Dimse.Scu.NAction do
   @doc """
   Sends an N-ACTION-RQ with action info and waits for N-ACTION-RSP.
 
-  Returns `{:ok, status, data}` on success, `{:error, reason}` on failure.
+  Returns `{:ok, status, data}` for successful or warning responses,
+  `{:error, {:status, status, data}}` for DIMSE failure statuses,
+  or `{:error, reason}` for transport/protocol failures.
   """
   @spec send(pid(), String.t(), String.t(), integer(), binary() | nil, keyword()) ::
-          {:ok, integer(), binary() | nil} | {:error, term()}
+          {:ok, integer(), binary() | nil}
+          | {:error, {:status, integer(), binary() | nil} | term()}
   def send(assoc, sop_class_uid, sop_instance_uid, action_type_id, data, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, 30_000)
     message_id = System.unique_integer([:positive]) &&& 0xFFFF
@@ -46,7 +49,7 @@ defmodule Dimse.Scu.NAction do
 
     case Dimse.Association.request(assoc, command_set, data, timeout) do
       {:ok, response, resp_data} ->
-        {:ok, Dimse.Command.status(response), resp_data}
+        Dimse.Scu.normalize_n_response(response, resp_data)
 
       {:error, _} = err ->
         err

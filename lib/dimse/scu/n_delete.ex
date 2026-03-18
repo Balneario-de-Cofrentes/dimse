@@ -31,10 +31,12 @@ defmodule Dimse.Scu.NDelete do
   @doc """
   Sends an N-DELETE-RQ and waits for N-DELETE-RSP.
 
-  Returns `{:ok, status, nil}` on success, `{:error, reason}` on failure.
+  Returns `{:ok, status, nil}` for successful or warning responses,
+  `{:error, {:status, status, nil}}` for DIMSE failure statuses,
+  or `{:error, reason}` for transport/protocol failures.
   """
   @spec send(pid(), String.t(), String.t(), keyword()) ::
-          {:ok, integer(), nil} | {:error, term()}
+          {:ok, integer(), nil} | {:error, {:status, integer(), nil} | term()}
   def send(assoc, sop_class_uid, sop_instance_uid, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, 30_000)
     message_id = System.unique_integer([:positive]) &&& 0xFFFF
@@ -42,7 +44,7 @@ defmodule Dimse.Scu.NDelete do
 
     case Dimse.Association.request(assoc, command_set, nil, timeout) do
       {:ok, response, data} ->
-        {:ok, Dimse.Command.status(response), data}
+        Dimse.Scu.normalize_n_response(response, data)
 
       {:error, _} = err ->
         err

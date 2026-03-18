@@ -169,6 +169,14 @@ defmodule Dimse.Command do
   defp encode_value({g, e}, :AT),
     do: <<g::16-little, e::16-little>>
 
+  defp encode_value(values, :AT) when is_list(values) do
+    values
+    |> Enum.map(fn
+      {g, e} -> <<g::16-little, e::16-little>>
+    end)
+    |> IO.iodata_to_binary()
+  end
+
   defp encode_value(value, _vr) when is_binary(value), do: value
 
   defp pad_to_even(binary, _vr) when rem(byte_size(binary), 2) == 0, do: binary
@@ -196,7 +204,11 @@ defmodule Dimse.Command do
   defp decode_value(<<value::16-little>>, :US), do: value
   defp decode_value(<<value::32-little>>, :UL), do: value
   defp decode_value(<<value::32-little-signed>>, :SL), do: value
-  defp decode_value(<<g::16-little, e::16-little>>, :AT), do: {g, e}
+
+  defp decode_value(value, :AT) when rem(byte_size(value), 4) == 0 do
+    for <<g::16-little, e::16-little <- value>>, do: {g, e}
+  end
+
   defp decode_value(value, :UI), do: String.trim_trailing(value, <<0x00>>)
   defp decode_value(value, :AE), do: String.trim(value)
   defp decode_value(value, :LO), do: String.trim_trailing(value)

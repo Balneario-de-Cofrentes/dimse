@@ -96,4 +96,19 @@ defmodule Dimse.Scu do
   def abort(assoc) do
     Dimse.Association.abort(assoc)
   end
+
+  @doc false
+  @spec normalize_n_response(map(), binary() | nil) ::
+          {:ok, integer(), binary() | nil} | {:error, {:status, integer(), binary() | nil}}
+  def normalize_n_response(response, data) do
+    status = Dimse.Command.status(response)
+
+    case Dimse.Command.Status.category(status) do
+      category when category in [:success, :warning] ->
+        {:ok, status, data}
+
+      _ ->
+        {:error, {:status, status, data}}
+    end
+  end
 end

@@ -121,13 +121,21 @@ defmodule Dimse.Handler do
             ) ::
               {:ok, integer(), binary() | nil} | {:error, integer(), String.t()}
 
-  @doc "Called when an N-CREATE-RQ is received with attributes."
+  @doc """
+  Called when an N-CREATE-RQ is received with attributes.
+
+  Implementations may return `{:ok, status, data}` when the request already
+  supplies the SOP Instance UID, or `{:ok, status, created_sop_instance_uid, data}`
+  when the SCP generates the UID and needs it echoed in the N-CREATE-RSP command.
+  """
   @callback handle_n_create(
               command :: map(),
               data_set :: binary(),
               state :: Dimse.Association.State.t()
             ) ::
-              {:ok, integer(), binary() | nil} | {:error, integer(), String.t()}
+              {:ok, integer(), binary() | nil}
+              | {:ok, integer(), String.t(), binary() | nil}
+              | {:error, integer(), String.t()}
 
   @doc "Called when an N-DELETE-RQ is received."
   @callback handle_n_delete(command :: map(), state :: Dimse.Association.State.t()) ::

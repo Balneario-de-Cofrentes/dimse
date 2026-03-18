@@ -254,7 +254,8 @@ defmodule Dimse do
   Returns `{:ok, status, data}` or `{:error, reason}`.
   """
   @spec n_get(pid(), String.t(), String.t(), keyword()) ::
-          {:ok, integer(), binary() | nil} | {:error, term()}
+          {:ok, integer(), binary() | nil}
+          | {:error, {:status, integer(), binary() | nil} | term()}
   def n_get(assoc, sop_class_uid, sop_instance_uid, opts \\ []) do
     Dimse.Scu.NGet.query(assoc, sop_class_uid, sop_instance_uid, opts)
   end
@@ -265,7 +266,8 @@ defmodule Dimse do
   Returns `{:ok, status, data}` or `{:error, reason}`.
   """
   @spec n_set(pid(), String.t(), String.t(), binary(), keyword()) ::
-          {:ok, integer(), binary() | nil} | {:error, term()}
+          {:ok, integer(), binary() | nil}
+          | {:error, {:status, integer(), binary() | nil} | term()}
   def n_set(assoc, sop_class_uid, sop_instance_uid, data, opts \\ []) do
     Dimse.Scu.NSet.send(assoc, sop_class_uid, sop_instance_uid, data, opts)
   end
@@ -276,7 +278,8 @@ defmodule Dimse do
   Returns `{:ok, status, data}` or `{:error, reason}`.
   """
   @spec n_action(pid(), String.t(), String.t(), integer(), binary() | nil, keyword()) ::
-          {:ok, integer(), binary() | nil} | {:error, term()}
+          {:ok, integer(), binary() | nil}
+          | {:error, {:status, integer(), binary() | nil} | term()}
   def n_action(assoc, sop_class_uid, sop_instance_uid, action_type_id, data, opts \\ []) do
     Dimse.Scu.NAction.send(assoc, sop_class_uid, sop_instance_uid, action_type_id, data, opts)
   end
@@ -292,7 +295,8 @@ defmodule Dimse do
   Returns `{:ok, status, data}` or `{:error, reason}`.
   """
   @spec n_create(pid(), String.t(), binary() | nil, keyword()) ::
-          {:ok, integer(), binary() | nil} | {:error, term()}
+          {:ok, integer(), binary() | nil}
+          | {:error, {:status, integer(), binary() | nil} | term()}
   def n_create(assoc, sop_class_uid, data, opts \\ []) do
     Dimse.Scu.NCreate.send(assoc, sop_class_uid, data, opts)
   end
@@ -303,7 +307,7 @@ defmodule Dimse do
   Returns `{:ok, status, nil}` or `{:error, reason}`.
   """
   @spec n_delete(pid(), String.t(), String.t(), keyword()) ::
-          {:ok, integer(), nil} | {:error, term()}
+          {:ok, integer(), nil} | {:error, {:status, integer(), nil} | term()}
   def n_delete(assoc, sop_class_uid, sop_instance_uid, opts \\ []) do
     Dimse.Scu.NDelete.send(assoc, sop_class_uid, sop_instance_uid, opts)
   end
@@ -314,7 +318,8 @@ defmodule Dimse do
   Returns `{:ok, status, data}` or `{:error, reason}`.
   """
   @spec n_event_report(pid(), String.t(), String.t(), integer(), binary() | nil, keyword()) ::
-          {:ok, integer(), binary() | nil} | {:error, term()}
+          {:ok, integer(), binary() | nil}
+          | {:error, {:status, integer(), binary() | nil} | term()}
   def n_event_report(assoc, sop_class_uid, sop_instance_uid, event_type_id, data, opts \\ []) do
     Dimse.Scu.NEventReport.send(
       assoc,

@@ -820,7 +820,8 @@ defmodule Dimse.IntegrationTest do
       test_pid = self()
       create_data = :crypto.strong_rand_bytes(64)
       response_data = :crypto.strong_rand_bytes(96)
-      handler = n_create_handler(test_pid, response_data)
+      created_uid = "1.2.826.0.1.3680043.8.498.999"
+      handler = n_create_handler(test_pid, response_data, created_uid)
 
       {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
       port = :ranch.get_port(ref)
@@ -838,6 +839,37 @@ defmodule Dimse.IntegrationTest do
                Dimse.n_create(assoc, @test_n_sop_class, create_data, timeout: 5_000)
 
       assert_receive {:n_create_called, ^create_data}, 2_000
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+
+    test "N-CREATE response command includes the created SOP Instance UID" do
+      test_pid = self()
+      create_data = :crypto.strong_rand_bytes(64)
+      response_data = :crypto.strong_rand_bytes(96)
+      created_uid = "1.2.826.0.1.3680043.8.498.1000"
+      handler = n_create_handler(test_pid, response_data, created_uid)
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "NCREATE_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@test_n_sop_class]
+        )
+
+      wait_for_established(assoc)
+
+      message_id = System.unique_integer([:positive])
+      command_set = Dimse.Scu.NCreate.build_command_set(@test_n_sop_class, message_id)
+
+      assert {:ok, response, ^response_data} =
+               Dimse.Association.request(assoc, command_set, create_data, 5_000)
+
+      assert response[{0x0000, 0x1000}] == created_uid
 
       assert :ok = Dimse.release(assoc, 5_000)
       Dimse.stop_listener(ref)
@@ -902,7 +934,7 @@ defmodule Dimse.IntegrationTest do
   end
 
   describe "DIMSE-N error handling" do
-    test "unimplemented handler returns 0x0112 (No Such SOP Class)" do
+    test "unimplemented handler returns explicit error tuples for DIMSE-N services" do
       handler = n_error_handler()
 
       {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
@@ -917,8 +949,25 @@ defmodule Dimse.IntegrationTest do
 
       wait_for_established(assoc)
 
-      assert {:ok, 0x0112, nil} =
+      assert {:error, {:status, 0x0112, nil}} =
                Dimse.n_get(assoc, @test_n_sop_class, "1.2.3.4.5", timeout: 5_000)
+
+      assert {:error, {:status, 0x0112, nil}} =
+               Dimse.n_set(assoc, @test_n_sop_class, "1.2.3.4.5", <<1, 2>>, timeout: 5_000)
+
+      assert {:error, {:status, 0x0112, nil}} =
+               Dimse.n_action(assoc, @test_n_sop_class, "1.2.3.4.5", 1, <<3, 4>>, timeout: 5_000)
+
+      assert {:error, {:status, 0x0112, nil}} =
+               Dimse.n_create(assoc, @test_n_sop_class, <<5, 6>>, timeout: 5_000)
+
+      assert {:error, {:status, 0x0112, nil}} =
+               Dimse.n_delete(assoc, @test_n_sop_class, "1.2.3.4.5", timeout: 5_000)
+
+      assert {:error, {:status, 0x0112, nil}} =
+               Dimse.n_event_report(assoc, @test_n_sop_class, "1.2.3.4.5", 1, <<7, 8>>,
+                 timeout: 5_000
+               )
 
       assert :ok = Dimse.release(assoc, 5_000)
       Dimse.stop_listener(ref)
@@ -1627,7 +1676,7 @@ defmodule Dimse.IntegrationTest do
     mod
   end
 
-  defp n_create_handler(test_pid, response_data) do
+  defp n_create_handler(test_pid, response_data, created_uid) do
     mod = :"Dimse.Test.NCreateHandler.#{System.unique_integer([:positive])}"
 
     Module.create(
@@ -1655,7 +1704,7 @@ defmodule Dimse.IntegrationTest do
 
         def handle_n_create(_command, data_set, _state) do
           send(unquote(test_pid), {:n_create_called, data_set})
-          {:ok, 0x0000, unquote(Macro.escape(response_data))}
+          {:ok, 0x0000, unquote(created_uid), unquote(Macro.escape(response_data))}
         end
       end,
       Macro.Env.location(__ENV__)
