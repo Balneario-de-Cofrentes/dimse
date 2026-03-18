@@ -37,7 +37,7 @@ Add `dimse` to your `mix.exs` dependencies:
 ```elixir
 def deps do
   [
-    {:dimse, "~> 0.6"}
+    {:dimse, "~> 0.7"}
   ]
 end
 ```
@@ -351,14 +351,11 @@ All DIMSE-C (PS3.7 Ch.9) and DIMSE-N (PS3.7 Ch.10) services, both SCP and SCU:
 
 | Feature | Priority | Notes |
 |---------|----------|-------|
-| SOP Class Extended Negotiation (0x56) | Medium | Role selection for SOP classes |
-| SOP Class Common Extended Negotiation (0x57) | Medium | Service class-wide negotiation |
-| User Identity Negotiation (0x58/0x59) | Medium | Username/password/Kerberos |
 | Asynchronous Operations Window (0x53) | Low | Multi-message pipelining |
 
 ## Testing
 
-252 tests (242 unit + 10 property-based), 0 failures.
+280 tests (270 unit + 10 property-based), 0 failures.
 
 ```bash
 mix test              # Run all tests
@@ -386,7 +383,7 @@ pynetdicom (Python), and fo-dicom (C#/.NET).
 | DIMSE-N services | 6/6 | 6/6 | 6/6 | 6/6 | 6/6 | 0/6 |
 | SCP + SCU | Both | Both | Both | Both | Both | SCU only |
 | TLS | Yes | Yes | Yes | Yes | Yes | No |
-| Extended negotiation | No | Yes | Yes | Yes | Yes | No |
+| Extended negotiation | Yes | Yes | Yes | Yes | Yes | No |
 | Async ops window | No | Yes | Partial | Negotiation only | Yes | No |
 | Telemetry | `:telemetry` | Logging | Logging | Events | Events | -- |
 | Concurrency model | GenServer/OTP | Threads | Threads | Threads | async/await | -- |
@@ -403,7 +400,7 @@ pynetdicom (Python), and fo-dicom (C#/.NET).
 | All 7 PDU types | Yes | 6/7 | 6/7 |
 | ARTIM timer | Yes | No | No |
 | SCU client API | Full | Partial | None |
-| Tests | 216 (206 + 10 prop) | ~81 | ~25 |
+| Tests | 280 (270 + 10 prop) | ~81 | ~25 |
 | Status | Active | Sporadic | Inactive |
 
 ### Ecosystem Positioning

@@ -56,6 +56,11 @@ defmodule Dimse.Scu do
       - `:verify` — `:verify_peer` to verify the server certificate
       - `:certfile` — client certificate for mutual TLS
       - `:keyfile` — client private key for mutual TLS
+    * `:role_selections` — list of `Dimse.Pdu.RoleSelection` structs proposing
+      SCU/SCP roles for specific SOP classes (PS3.7 Annex D.3.3.4)
+    * `:user_identity` — `Dimse.Pdu.UserIdentity` struct for SCU authentication
+      (PS3.7 Annex D.3.3.7). The SCP handler's `handle_authenticate/2` callback
+      is called to accept or reject.
   """
   @spec open(String.t(), pos_integer(), keyword()) :: {:ok, pid()} | {:error, term()}
   def open(host, port, opts \\ []) do
@@ -82,6 +87,8 @@ defmodule Dimse.Scu do
       ]
       |> maybe_add(:transfer_syntaxes, Keyword.get(opts, :transfer_syntaxes))
       |> maybe_add(:tls, Keyword.get(opts, :tls))
+      |> maybe_add(:role_selections, Keyword.get(opts, :role_selections))
+      |> maybe_add(:user_identity, Keyword.get(opts, :user_identity))
 
     # Use start (not start_link) so connection failures don't crash the caller
     case Dimse.Association.start(assoc_opts) do

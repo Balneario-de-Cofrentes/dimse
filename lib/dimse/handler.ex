@@ -177,9 +177,33 @@ defmodule Dimse.Handler do
   @callback resolve_ae(ae_title :: String.t()) ::
               {:ok, {String.t(), pos_integer()}} | {:error, term()}
 
+  @doc """
+  Authenticates the requesting SCU during A-ASSOCIATE-RQ processing.
+
+  Called when the incoming A-ASSOCIATE-RQ contains a `UserIdentity` sub-item
+  (0x58). The SCP handler can inspect the identity and decide whether to accept
+  or reject the association.
+
+  ## Return Values
+
+    * `{:ok, nil}` — accept the association; no server response included in AC
+    * `{:ok, server_response}` — accept; include `server_response` binary in AC
+      as `UserIdentityAc` (only sent when the SCU set
+      `positive_response_requested = true`)
+    * `{:error, reason}` — reject the association; sends A-ASSOCIATE-RJ with
+      result=1, source=1, reason=1
+
+  When not implemented, the SCP accepts all associations regardless of identity.
+  """
+  @callback handle_authenticate(
+              user_identity :: Dimse.Pdu.UserIdentity.t(),
+              state :: Dimse.Association.State.t()
+            ) :: {:ok, nil | binary()} | {:error, term()}
+
   @optional_callbacks [
     supported_abstract_syntaxes: 0,
     resolve_ae: 1,
+    handle_authenticate: 2,
     handle_n_get: 2,
     handle_n_set: 3,
     handle_n_action: 3,

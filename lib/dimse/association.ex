@@ -22,7 +22,7 @@ defmodule Dimse.Association do
   alias Dimse.Command.Fields
 
   @implementation_uid "1.2.826.0.1.3680043.8.498.1"
-  @implementation_version "DIMSE_0.6.0"
+  @implementation_version "DIMSE_0.7.0"
 
   @default_transfer_syntaxes MapSet.new([
                                "1.2.840.10008.1.2",
@@ -114,6 +114,17 @@ defmodule Dimse.Association do
     GenServer.call(pid, :get_negotiated_contexts)
   end
 
+  @doc """
+  Returns the negotiated role selections for this association.
+
+  Keys are SOP Class UIDs; values are `{scu_role, scp_role}` boolean tuples.
+  Returns an empty map when no role selections were negotiated.
+  """
+  @spec negotiated_roles(pid()) :: %{String.t() => {boolean(), boolean()}}
+  def negotiated_roles(pid) do
+    GenServer.call(pid, :get_negotiated_roles)
+  end
+
   # --- GenServer callbacks ---
 
   @impl true
@@ -177,6 +188,8 @@ defmodule Dimse.Association do
     calling_ae = Keyword.get(opts, :calling_ae, state.local_ae_title)
     abstract_syntaxes = Keyword.get(opts, :abstract_syntaxes, [])
     tls_opts = Keyword.get(opts, :tls)
+    role_selections = Keyword.get(opts, :role_selections)
+    user_identity = Keyword.get(opts, :user_identity)
 
     transfer_syntaxes =
       Keyword.get(opts, :transfer_syntaxes, MapSet.to_list(@default_transfer_syntaxes))
@@ -216,7 +229,9 @@ defmodule Dimse.Association do
             called_ae,
             abstract_syntaxes,
             transfer_syntaxes,
-            state.config
+            state.config,
+            role_selections: role_selections,
+            user_identity: user_identity
           )
 
         send_pdu(new_state, rq)
@@ -283,6 +298,10 @@ defmodule Dimse.Association do
 
   def handle_call(:get_negotiated_contexts, _from, state) do
     {:reply, state.negotiated_contexts, state}
+  end
+
+  def handle_call(:get_negotiated_roles, _from, state) do
+    {:reply, state.role_selections, state}
   end
 
   def handle_call(_msg, _from, state), do: {:reply, {:error, :not_established}, state}
@@ -548,38 +567,49 @@ defmodule Dimse.Association do
       send_pdu(state, %Pdu.AssociateRj{result: 1, source: 1, reason: 1})
       {:stop, :no_accepted_contexts, state}
     else
-      remote_max_pdu =
-        case rq.user_information do
-          %Pdu.UserInformation{max_pdu_length: len} when is_integer(len) and len > 0 -> len
-          _ -> 16_384
-        end
+      case authenticate_user(rq.user_information, handler, state) do
+        {:ok, user_identity_ac} ->
+          remote_max_pdu =
+            case rq.user_information do
+              %Pdu.UserInformation{max_pdu_length: len} when is_integer(len) and len > 0 -> len
+              _ -> 16_384
+            end
 
-      effective_max_pdu = min(remote_max_pdu, state.config.max_pdu_length)
+          effective_max_pdu = min(remote_max_pdu, state.config.max_pdu_length)
+          role_selections = echo_role_selections(rq.user_information, accepted_map)
 
-      ac = %Pdu.AssociateAc{
-        protocol_version: 1,
-        called_ae_title: rq.called_ae_title,
-        calling_ae_title: state.local_ae_title,
-        presentation_contexts: result_contexts,
-        user_information: %Pdu.UserInformation{
-          max_pdu_length: state.config.max_pdu_length,
-          implementation_uid: @implementation_uid,
-          implementation_version: @implementation_version
-        }
-      }
+          ac = %Pdu.AssociateAc{
+            protocol_version: 1,
+            called_ae_title: rq.called_ae_title,
+            calling_ae_title: state.local_ae_title,
+            presentation_contexts: result_contexts,
+            user_information: %Pdu.UserInformation{
+              max_pdu_length: state.config.max_pdu_length,
+              implementation_uid: @implementation_uid,
+              implementation_version: @implementation_version,
+              role_selections: role_selections,
+              user_identity_ac: user_identity_ac
+            }
+          }
 
-      send_pdu(state, ac)
+          send_pdu(state, ac)
 
-      {:ok,
-       %{
-         state
-         | phase: :established,
-           remote_ae_title: rq.calling_ae_title,
-           negotiated_contexts: accepted_map,
-           max_pdu_length: effective_max_pdu,
-           implementation_uid: get_in_user_info(rq, :implementation_uid),
-           implementation_version: get_in_user_info(rq, :implementation_version)
-       }}
+          {:ok,
+           %{
+             state
+             | phase: :established,
+               remote_ae_title: rq.calling_ae_title,
+               negotiated_contexts: accepted_map,
+               role_selections: roles_to_map(role_selections),
+               max_pdu_length: effective_max_pdu,
+               implementation_uid: get_in_user_info(rq, :implementation_uid),
+               implementation_version: get_in_user_info(rq, :implementation_version)
+           }}
+
+        {:error, _reason} ->
+          send_pdu(state, %Pdu.AssociateRj{result: 1, source: 1, reason: 1})
+          {:stop, :authentication_failed, state}
+      end
     end
   end
 
@@ -603,11 +633,18 @@ defmodule Dimse.Association do
 
     effective_max_pdu = min(remote_max_pdu, state.config.max_pdu_length)
 
+    negotiated_roles =
+      case ac.user_information do
+        %Pdu.UserInformation{role_selections: roles} -> roles_to_map(roles)
+        _ -> %{}
+      end
+
     {:ok,
      %{
        state
        | phase: :established,
          negotiated_contexts: accepted,
+         role_selections: negotiated_roles,
          max_pdu_length: effective_max_pdu,
          implementation_uid: get_in_user_info(ac, :implementation_uid),
          implementation_version: get_in_user_info(ac, :implementation_version)
@@ -1138,7 +1175,14 @@ defmodule Dimse.Association do
 
   # --- Helpers ---
 
-  defp build_associate_rq(calling_ae, called_ae, abstract_syntaxes, transfer_syntaxes, config) do
+  defp build_associate_rq(
+         calling_ae,
+         called_ae,
+         abstract_syntaxes,
+         transfer_syntaxes,
+         config,
+         opts
+       ) do
     pcs =
       abstract_syntaxes
       |> Enum.with_index(1)
@@ -1158,7 +1202,9 @@ defmodule Dimse.Association do
       user_information: %Pdu.UserInformation{
         max_pdu_length: config.max_pdu_length,
         implementation_uid: @implementation_uid,
-        implementation_version: @implementation_version
+        implementation_version: @implementation_version,
+        role_selections: Keyword.get(opts, :role_selections),
+        user_identity: Keyword.get(opts, :user_identity)
       }
     }
   end
@@ -1286,6 +1332,60 @@ defmodule Dimse.Association do
 
   defp merge_extra_tags(cmd, extra_tags) when map_size(extra_tags) == 0, do: cmd
   defp merge_extra_tags(cmd, extra_tags), do: Map.merge(cmd, extra_tags)
+
+  # --- Extended Negotiation helpers ---
+
+  # Authenticate the requesting SCU. Returns {:ok, user_identity_ac | nil} or {:error, reason}.
+  defp authenticate_user(nil, _handler, _state), do: {:ok, nil}
+
+  defp authenticate_user(%Pdu.UserInformation{user_identity: nil}, _handler, _state) do
+    {:ok, nil}
+  end
+
+  defp authenticate_user(%Pdu.UserInformation{user_identity: identity}, handler, state) do
+    if function_exported?(handler, :handle_authenticate, 2) do
+      case handler.handle_authenticate(identity, state) do
+        {:ok, nil} ->
+          {:ok, nil}
+
+        {:ok, server_response} when is_binary(server_response) ->
+          if identity.positive_response_requested do
+            {:ok, %Pdu.UserIdentityAc{server_response: server_response}}
+          else
+            {:ok, nil}
+          end
+
+        {:error, _} = err ->
+          err
+      end
+    else
+      {:ok, nil}
+    end
+  end
+
+  # Echo back role selections that were accepted (filtered to negotiated SOP classes).
+  defp echo_role_selections(%Pdu.UserInformation{role_selections: nil}, _accepted), do: nil
+  defp echo_role_selections(%Pdu.UserInformation{role_selections: []}, _accepted), do: nil
+
+  defp echo_role_selections(%Pdu.UserInformation{role_selections: roles}, accepted) do
+    accepted_sop_uids =
+      accepted
+      |> Map.values()
+      |> Enum.map(fn {sop_class_uid, _ts} -> sop_class_uid end)
+      |> MapSet.new()
+
+    filtered =
+      Enum.filter(roles, fn rs -> MapSet.member?(accepted_sop_uids, rs.sop_class_uid) end)
+
+    if filtered == [], do: nil, else: filtered
+  end
+
+  # Convert a list of RoleSelection structs to the state's role_selections map.
+  defp roles_to_map(nil), do: %{}
+
+  defp roles_to_map(roles) do
+    Map.new(roles, fn rs -> {rs.sop_class_uid, {rs.scu_role, rs.scp_role}} end)
+  end
 
   # C-STORE-RSP must echo back the AffectedSOPInstanceUID (PS3.7 Table 9.1-1)
   defp maybe_put_instance_uid(cmd, 0x0001, request_command) do

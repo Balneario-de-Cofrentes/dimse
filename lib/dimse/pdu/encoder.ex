@@ -35,7 +35,12 @@ defmodule Dimse.Pdu.Encoder do
   @user_information_item 0x50
   @max_length_item 0x51
   @implementation_uid_item 0x52
+  @role_selection_item 0x54
   @implementation_version_item 0x55
+  @sop_class_extended_item 0x56
+  @sop_class_common_extended_item 0x57
+  @user_identity_item 0x58
+  @user_identity_ac_item 0x59
 
   @doc """
   Encodes a PDU struct into iodata.
@@ -202,7 +207,12 @@ defmodule Dimse.Pdu.Encoder do
     items = [
       encode_max_length(ui.max_pdu_length || 16_384),
       encode_implementation_uid(ui.implementation_uid || "1.2.826.0.1.3680043.8.498.1"),
-      encode_implementation_version(ui.implementation_version)
+      encode_implementation_version(ui.implementation_version),
+      encode_role_selections(ui.role_selections),
+      encode_sop_class_extended_list(ui.sop_class_extended),
+      encode_sop_class_common_extended_list(ui.sop_class_common_extended),
+      encode_user_identity(ui.user_identity),
+      encode_user_identity_ac(ui.user_identity_ac)
     ]
 
     [<<@user_information_item, 0x00, :erlang.iolist_size(items)::16>>, items]
@@ -220,6 +230,96 @@ defmodule Dimse.Pdu.Encoder do
 
   defp encode_implementation_version(version) do
     <<@implementation_version_item, 0x00, byte_size(version)::16, version::binary>>
+  end
+
+  ## Extended Negotiation sub-item encoders
+
+  defp encode_role_selections(nil), do: <<>>
+  defp encode_role_selections([]), do: <<>>
+  defp encode_role_selections(list), do: Enum.map(list, &encode_role_selection/1)
+
+  defp encode_role_selection(%Pdu.RoleSelection{} = rs) do
+    uid = rs.sop_class_uid || ""
+    uid_len = byte_size(uid)
+    # item_len = 2 (uid_len field) + uid_len + 2 (scu + scp)
+    item_len = 2 + uid_len + 2
+    scu = if rs.scu_role, do: 1, else: 0
+    scp = if rs.scp_role, do: 1, else: 0
+    <<@role_selection_item, 0x00, item_len::16, uid_len::16, uid::binary, scu::8, scp::8>>
+  end
+
+  defp encode_sop_class_extended_list(nil), do: <<>>
+  defp encode_sop_class_extended_list([]), do: <<>>
+  defp encode_sop_class_extended_list(list), do: Enum.map(list, &encode_sop_class_extended/1)
+
+  defp encode_sop_class_extended(%Pdu.SopClassExtendedNegotiation{} = en) do
+    uid = en.sop_class_uid || ""
+    uid_len = byte_size(uid)
+    app_info = en.service_class_application_info || <<>>
+    # item_len = 2 (uid_len field) + uid_len + len(app_info)
+    item_len = 2 + uid_len + byte_size(app_info)
+    <<@sop_class_extended_item, 0x00, item_len::16, uid_len::16, uid::binary, app_info::binary>>
+  end
+
+  defp encode_sop_class_common_extended_list(nil), do: <<>>
+  defp encode_sop_class_common_extended_list([]), do: <<>>
+
+  defp encode_sop_class_common_extended_list(list) do
+    Enum.map(list, &encode_sop_class_common_extended/1)
+  end
+
+  defp encode_sop_class_common_extended(%Pdu.SopClassCommonExtendedNegotiation{} = en) do
+    uid = en.sop_class_uid || ""
+    uid_len = byte_size(uid)
+    svc_uid = en.service_class_uid || ""
+    svc_uid_len = byte_size(svc_uid)
+    related = encode_uid_list(en.related_general_sop_class_uids || [])
+    related_len = :erlang.iolist_size(related)
+
+    header = <<
+      @sop_class_common_extended_item,
+      0x00,
+      2 + uid_len + 2 + svc_uid_len + 2 + related_len::16,
+      uid_len::16,
+      uid::binary,
+      svc_uid_len::16,
+      svc_uid::binary,
+      related_len::16
+    >>
+
+    [header, related]
+  end
+
+  defp encode_uid_list(uids) do
+    Enum.map(uids, fn uid ->
+      <<byte_size(uid)::16, uid::binary>>
+    end)
+  end
+
+  defp encode_user_identity(nil), do: <<>>
+
+  defp encode_user_identity(%Pdu.UserIdentity{} = identity) do
+    primary = identity.primary_field || ""
+    secondary = identity.secondary_field || ""
+    pf_len = byte_size(primary)
+    sf_len = byte_size(secondary)
+    resp_req = if identity.positive_response_requested, do: 1, else: 0
+    identity_type = identity.identity_type || 1
+    # item_len = 1 (type) + 1 (resp_req) + 2 (pf_len) + pf_len + 2 (sf_len) + sf_len
+    item_len = 1 + 1 + 2 + pf_len + 2 + sf_len
+
+    <<@user_identity_item, 0x00, item_len::16, identity_type::8, resp_req::8, pf_len::16,
+      primary::binary, sf_len::16, secondary::binary>>
+  end
+
+  defp encode_user_identity_ac(nil), do: <<>>
+
+  defp encode_user_identity_ac(%Pdu.UserIdentityAc{} = uiac) do
+    response = uiac.server_response || <<>>
+    resp_len = byte_size(response)
+    # item_len = 2 (resp_len) + resp_len
+    item_len = 2 + resp_len
+    <<@user_identity_ac_item, 0x00, item_len::16, resp_len::16, response::binary>>
   end
 
   ## Helpers

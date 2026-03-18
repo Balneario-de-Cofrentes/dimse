@@ -23,6 +23,11 @@ defmodule Dimse.Pdu do
   - `AbstractSyntax` — SOP Class UID
   - `TransferSyntax` — Transfer Syntax UID
   - `UserInformation` — max PDU length, implementation UID/version, extended negotiation
+  - `RoleSelection` — SCU/SCP role negotiation per SOP class (PS3.7 D.3.3.4)
+  - `SopClassExtendedNegotiation` — service-class-specific info per SOP class (PS3.7 D.3.3.5)
+  - `SopClassCommonExtendedNegotiation` — service class + related SOP classes (PS3.7 D.3.3.6)
+  - `UserIdentity` — SCU authentication credentials in A-ASSOCIATE-RQ (PS3.7 D.3.3.7)
+  - `UserIdentityAc` — SCP server response in A-ASSOCIATE-AC (PS3.7 D.3.3.8)
 
   ## Wire Format
 
@@ -149,20 +154,139 @@ defmodule Dimse.Pdu do
   end
 
   defmodule UserInformation do
-    @moduledoc "User Information item used in A-ASSOCIATE-RQ/AC. PS3.8 Section 9.3.2.3."
+    @moduledoc """
+    User Information item used in A-ASSOCIATE-RQ/AC. PS3.8 Section 9.3.2.3.
+
+    ## Extended Negotiation Sub-Items (PS3.7 Annex D)
+
+    | Type | Hex  | Struct                              | Notes                       |
+    |------|------|-------------------------------------|-----------------------------|
+    | –    | 0x51 | (inline) max_pdu_length             | PS3.7 D.3.3.1               |
+    | –    | 0x52 | (inline) implementation_uid         | PS3.7 D.3.3.2               |
+    | –    | 0x55 | (inline) implementation_version     | PS3.7 D.3.3.3               |
+    | 0x54 | –    | `RoleSelection`                     | PS3.7 Annex D.3.3.4         |
+    | 0x56 | –    | `SopClassExtendedNegotiation`       | PS3.7 Annex D.3.3.5         |
+    | 0x57 | –    | `SopClassCommonExtendedNegotiation` | PS3.7 Annex D.3.3.6         |
+    | 0x58 | –    | `UserIdentity` (RQ only)            | PS3.7 Annex D.3.3.7         |
+    | 0x59 | –    | `UserIdentityAc` (AC only)          | PS3.7 Annex D.3.3.8         |
+
+    Async Operations Window (0x53) is not yet implemented.
+    """
 
     @type t :: %__MODULE__{
             max_pdu_length: pos_integer() | nil,
             implementation_uid: String.t() | nil,
             implementation_version: String.t() | nil,
-            extended_negotiation: term() | nil
+            role_selections: [Dimse.Pdu.RoleSelection.t()] | nil,
+            sop_class_extended: [Dimse.Pdu.SopClassExtendedNegotiation.t()] | nil,
+            sop_class_common_extended: [Dimse.Pdu.SopClassCommonExtendedNegotiation.t()] | nil,
+            user_identity: Dimse.Pdu.UserIdentity.t() | nil,
+            user_identity_ac: Dimse.Pdu.UserIdentityAc.t() | nil
           }
 
     defstruct [
       :max_pdu_length,
       :implementation_uid,
       :implementation_version,
-      :extended_negotiation
+      :role_selections,
+      :sop_class_extended,
+      :sop_class_common_extended,
+      :user_identity,
+      :user_identity_ac
     ]
+  end
+
+  defmodule RoleSelection do
+    @moduledoc """
+    Role Selection sub-item (0x54). PS3.7 Annex D.3.3.4.
+
+    Negotiates SCU/SCP roles for a specific SOP class. Each side can propose
+    its role — SCU (service class user), SCP (service class provider), or both.
+    """
+
+    @type t :: %__MODULE__{
+            sop_class_uid: String.t() | nil,
+            scu_role: boolean() | nil,
+            scp_role: boolean() | nil
+          }
+
+    defstruct [:sop_class_uid, :scu_role, :scp_role]
+  end
+
+  defmodule SopClassExtendedNegotiation do
+    @moduledoc """
+    SOP Class Extended Negotiation sub-item (0x56). PS3.7 Annex D.3.3.5.
+
+    Carries service-class-specific application information for a SOP class.
+    The `service_class_application_info` binary is interpreted by the
+    service class defined by `sop_class_uid`.
+    """
+
+    @type t :: %__MODULE__{
+            sop_class_uid: String.t() | nil,
+            service_class_application_info: binary() | nil
+          }
+
+    defstruct [:sop_class_uid, :service_class_application_info]
+  end
+
+  defmodule SopClassCommonExtendedNegotiation do
+    @moduledoc """
+    SOP Class Common Extended Negotiation sub-item (0x57). PS3.7 Annex D.3.3.6.
+
+    Associates a SOP class with its service class and optionally lists related
+    general SOP classes that should also be accepted during negotiation.
+    """
+
+    @type t :: %__MODULE__{
+            sop_class_uid: String.t() | nil,
+            service_class_uid: String.t() | nil,
+            related_general_sop_class_uids: [String.t()] | nil
+          }
+
+    defstruct [:sop_class_uid, :service_class_uid, :related_general_sop_class_uids]
+  end
+
+  defmodule UserIdentity do
+    @moduledoc """
+    User Identity sub-item for A-ASSOCIATE-RQ (0x58). PS3.7 Annex D.3.3.7.
+
+    Carries SCU identity credentials for authentication by the SCP.
+
+    ## Identity Types
+
+    | Value | Meaning                      |
+    |-------|------------------------------|
+    | 1     | Username                     |
+    | 2     | Username + Passcode          |
+    | 3     | Kerberos Service Ticket      |
+    | 4     | SAML Assertion               |
+    | 5     | JSON Web Token (JWT)         |
+    """
+
+    @type t :: %__MODULE__{
+            identity_type: pos_integer() | nil,
+            positive_response_requested: boolean() | nil,
+            primary_field: binary() | nil,
+            secondary_field: binary() | nil
+          }
+
+    defstruct [:identity_type, :positive_response_requested, :primary_field, :secondary_field]
+  end
+
+  defmodule UserIdentityAc do
+    @moduledoc """
+    User Identity sub-item for A-ASSOCIATE-AC (0x59). PS3.7 Annex D.3.3.8.
+
+    Carries the SCP's server response to the SCU's identity request.
+    Only present when the SCU set `positive_response_requested = true`
+    and the SCP chooses to respond.
+    """
+
+    @type t :: %__MODULE__{
+            server_response: binary() | nil
+          }
+
+    defstruct [:server_response]
   end
 end

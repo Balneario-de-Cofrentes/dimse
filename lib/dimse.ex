@@ -97,6 +97,10 @@ defmodule Dimse do
     * `:tls` — TLS options (keyword list). When present, the SCU connects
       via TLS instead of plain TCP. Accepts standard `:ssl` options such as
       `:cacertfile`, `:verify`, `:certfile`, and `:keyfile`.
+    * `:role_selections` — list of `Dimse.Pdu.RoleSelection` structs proposing
+      SCU/SCP roles per SOP class (PS3.7 Annex D.3.3.4)
+    * `:user_identity` — `Dimse.Pdu.UserIdentity` struct for SCU authentication
+      (PS3.7 Annex D.3.3.7)
 
   Returns `{:ok, association_pid}` or `{:error, reason}`.
   """

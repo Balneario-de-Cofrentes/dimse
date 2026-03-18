@@ -273,7 +273,12 @@ defmodule Dimse.Pdu.Decoder do
 
   ## User Information parser
 
-  defp parse_user_information(data), do: parse_user_info_items(data, %Pdu.UserInformation{})
+  defp parse_user_information(data) do
+    case parse_user_info_items(data, %Pdu.UserInformation{}) do
+      {:ok, ui} -> {:ok, reverse_ui_list_fields(ui)}
+      err -> err
+    end
+  end
 
   defp parse_user_info_items(<<>>, ui), do: {:ok, ui}
 
@@ -290,6 +295,20 @@ defmodule Dimse.Pdu.Decoder do
     parse_user_info_items(rest, %{ui | implementation_uid: uid})
   end
 
+  # Role Selection (0x54) — PS3.7 Annex D.3.3.4
+  defp parse_user_info_items(
+         <<0x54, 0x00, len::16, data::binary-size(len), rest::binary>>,
+         ui
+       ) do
+    case parse_role_selection(data) do
+      {:ok, rs} ->
+        parse_user_info_items(rest, %{ui | role_selections: [rs | ui.role_selections || []]})
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
   # Implementation Version Name (0x55)
   defp parse_user_info_items(
          <<0x55, 0x00, len::16, version::binary-size(len), rest::binary>>,
@@ -298,12 +317,167 @@ defmodule Dimse.Pdu.Decoder do
     parse_user_info_items(rest, %{ui | implementation_version: version})
   end
 
+  # SOP Class Extended Negotiation (0x56) — PS3.7 Annex D.3.3.5
+  defp parse_user_info_items(
+         <<0x56, 0x00, len::16, data::binary-size(len), rest::binary>>,
+         ui
+       ) do
+    case parse_sop_class_extended(data) do
+      {:ok, en} ->
+        parse_user_info_items(rest, %{ui | sop_class_extended: [en | ui.sop_class_extended || []]})
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  # SOP Class Common Extended Negotiation (0x57) — PS3.7 Annex D.3.3.6
+  defp parse_user_info_items(
+         <<0x57, 0x00, len::16, data::binary-size(len), rest::binary>>,
+         ui
+       ) do
+    case parse_sop_class_common_extended(data) do
+      {:ok, en} ->
+        parse_user_info_items(rest, %{
+          ui
+          | sop_class_common_extended: [en | ui.sop_class_common_extended || []]
+        })
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  # User Identity (0x58 — RQ) — PS3.7 Annex D.3.3.7
+  defp parse_user_info_items(
+         <<0x58, 0x00, len::16, data::binary-size(len), rest::binary>>,
+         ui
+       ) do
+    case parse_user_identity(data) do
+      {:ok, identity} ->
+        parse_user_info_items(rest, %{ui | user_identity: identity})
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  # User Identity (0x59 — AC) — PS3.7 Annex D.3.3.8
+  defp parse_user_info_items(
+         <<0x59, 0x00, len::16, data::binary-size(len), rest::binary>>,
+         ui
+       ) do
+    case parse_user_identity_ac(data) do
+      {:ok, identity_ac} ->
+        parse_user_info_items(rest, %{ui | user_identity_ac: identity_ac})
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
   # Skip unknown user info sub-items
   defp parse_user_info_items(<<_type, 0x00, len::16, _data::binary-size(len), rest::binary>>, ui) do
     parse_user_info_items(rest, ui)
   end
 
   defp parse_user_info_items(_, _), do: {:error, :malformed_user_information}
+
+  ## Extended Negotiation sub-item parsers
+
+  # 0x54 RoleSelection: <<uid_len::16, uid::binary(uid_len), scu::8, scp::8>>
+  defp parse_role_selection(<<uid_len::16, uid::binary-size(uid_len), scu, scp>>) do
+    {:ok,
+     %Pdu.RoleSelection{
+       sop_class_uid: uid,
+       scu_role: scu == 1,
+       scp_role: scp == 1
+     }}
+  end
+
+  defp parse_role_selection(_), do: {:error, :malformed_role_selection}
+
+  # 0x56 SopClassExtendedNegotiation: <<uid_len::16, uid::binary(uid_len), app_info::binary>>
+  defp parse_sop_class_extended(<<uid_len::16, uid::binary-size(uid_len), app_info::binary>>) do
+    {:ok,
+     %Pdu.SopClassExtendedNegotiation{
+       sop_class_uid: uid,
+       service_class_application_info: app_info
+     }}
+  end
+
+  defp parse_sop_class_extended(_), do: {:error, :malformed_sop_class_extended}
+
+  # 0x57 SopClassCommonExtendedNegotiation:
+  #   <<uid_len::16, uid::binary(uid_len),
+  #     svc_uid_len::16, svc_uid::binary(svc_uid_len),
+  #     related_len::16, related_block::binary(related_len)>>
+  defp parse_sop_class_common_extended(
+         <<uid_len::16, uid::binary-size(uid_len), svc_uid_len::16,
+           svc_uid::binary-size(svc_uid_len), related_len::16,
+           related_block::binary-size(related_len)>>
+       ) do
+    case parse_uid_list(related_block, []) do
+      {:ok, related} ->
+        {:ok,
+         %Pdu.SopClassCommonExtendedNegotiation{
+           sop_class_uid: uid,
+           service_class_uid: svc_uid,
+           related_general_sop_class_uids: related
+         }}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp parse_sop_class_common_extended(_), do: {:error, :malformed_sop_class_common_extended}
+
+  # Tail-recursive parser for a list of <<len::16, uid::binary(len)>> entries
+  defp parse_uid_list(<<>>, acc), do: {:ok, Enum.reverse(acc)}
+
+  defp parse_uid_list(<<len::16, uid::binary-size(len), rest::binary>>, acc) do
+    parse_uid_list(rest, [uid | acc])
+  end
+
+  defp parse_uid_list(_, _), do: {:error, :malformed_uid_list}
+
+  # 0x58 UserIdentity (RQ):
+  #   <<type::8, resp_req::8, pf_len::16, primary::binary(pf_len), sf_len::16, secondary::binary(sf_len)>>
+  defp parse_user_identity(
+         <<type, resp_req, pf_len::16, primary::binary-size(pf_len), sf_len::16,
+           secondary::binary-size(sf_len)>>
+       ) do
+    {:ok,
+     %Pdu.UserIdentity{
+       identity_type: type,
+       positive_response_requested: resp_req == 1,
+       primary_field: primary,
+       secondary_field: secondary
+     }}
+  end
+
+  defp parse_user_identity(_), do: {:error, :malformed_user_identity}
+
+  # 0x59 UserIdentityAc: <<resp_len::16, response::binary(resp_len)>>
+  defp parse_user_identity_ac(<<resp_len::16, response::binary-size(resp_len)>>) do
+    {:ok, %Pdu.UserIdentityAc{server_response: response}}
+  end
+
+  defp parse_user_identity_ac(_), do: {:error, :malformed_user_identity_ac}
+
+  # Reverses list fields that were accumulated in reverse order during parsing
+  defp reverse_ui_list_fields(%Pdu.UserInformation{} = ui) do
+    %{
+      ui
+      | role_selections: reverse_or_nil(ui.role_selections),
+        sop_class_extended: reverse_or_nil(ui.sop_class_extended),
+        sop_class_common_extended: reverse_or_nil(ui.sop_class_common_extended)
+    }
+  end
+
+  defp reverse_or_nil(nil), do: nil
+  defp reverse_or_nil(list), do: Enum.reverse(list)
 
   ## P-DATA-TF PDV items parser
 

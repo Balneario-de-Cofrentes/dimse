@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-03-18
+
+### Added
+
+- Extended Negotiation sub-items in A-ASSOCIATE-RQ/AC `UserInformation` block (PS3.7 Annex D)
+- **Role Selection (0x54)** — SCU/SCP role negotiation per SOP class (`Dimse.Pdu.RoleSelection`)
+- **SOP Class Extended Negotiation (0x56)** — service-class-specific application info (`Dimse.Pdu.SopClassExtendedNegotiation`)
+- **SOP Class Common Extended Negotiation (0x57)** — service class UID + related SOP class UIDs (`Dimse.Pdu.SopClassCommonExtendedNegotiation`)
+- **User Identity Negotiation (0x58/0x59)** — username/password/Kerberos/SAML/JWT authentication (`Dimse.Pdu.UserIdentity`, `Dimse.Pdu.UserIdentityAc`)
+- `handle_authenticate/2` optional SCP callback — returns `{:ok, nil | binary()}` to accept or `{:error, reason}` to reject; A-ASSOCIATE-RJ sent automatically on rejection
+- `Dimse.Association.negotiated_roles/1` — retrieve negotiated SCU/SCP roles for the association as `%{sop_class_uid => {scu, scp}}`
+- `:role_selections` and `:user_identity` opts for `Dimse.connect/3` and `Dimse.Scu.open/3`
+- SCP echoes back role selections filtered to accepted SOP classes in A-ASSOCIATE-AC
+- Server response from `handle_authenticate/2` included in A-ASSOCIATE-AC when SCU requested positive response
+- 28 new tests: 23 PDU unit tests + 5 Extended Negotiation integration tests
+
+### Changed
+
+- `UserInformation` struct replaces `extended_negotiation: term()` placeholder with 5 typed fields: `role_selections`, `sop_class_extended`, `sop_class_common_extended`, `user_identity`, `user_identity_ac`
+- `handle_authenticate/2` added to `@optional_callbacks` — associations without the callback default to accepting all SCUs
+- Implementation version bumped to `DIMSE_0.7.0`
+
 ## [0.6.1] - 2026-03-18
 
 ### Added
@@ -160,7 +182,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Telemetry event definitions for association lifecycle and PDU I/O
 - CI workflow with Elixir 1.16/1.17/1.18 matrix
 
-[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.5.0...v0.5.1
