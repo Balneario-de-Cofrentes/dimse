@@ -7,11 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-03-18
+
+### Added
+
+- C-MOVE SCU (`Dimse.Scu.Move`) — retrieve instances to a destination AE via C-STORE sub-operations
+- C-GET SCU (`Dimse.Scu.Get`) — retrieve instances on the same association via interleaved C-STORE sub-ops
+- `Dimse.move/4` public API with query level convenience atoms (`:patient`, `:study`) and `dest_ae` option
+- `Dimse.get/4` public API with query level convenience atoms (`:patient`, `:study`)
+- `Association.get_request/4` for C-GET multi-response with interleaved C-STORE handling
+- `resolve_ae/1` optional handler callback for C-MOVE destination AE resolution
+- Sub-operation state machine in `Association.State` for tracking C-GET/C-MOVE progress
+- SCP dispatch for C-GET-RQ (0x0010) and C-MOVE-RQ (0x0021) with asynchronous sub-operation processing
+- SCU `get_mode` for auto-accepting C-STORE sub-operations during C-GET retrieval
+- Sub-operation count tracking (remaining/completed/failed/warning) in C-GET/C-MOVE responses
+- C-GET integration tests (basic retrieval, empty, error, mixed echo+get)
+- C-MOVE integration tests (basic retrieval, empty, error, resolve_ae failure, mixed echo+move)
+- Unit tests for `Dimse.Scu.Move` and `Dimse.Scu.Get` (SOP class mapping, command set building)
+
+### Changed
+
+- **Breaking**: `handle_move/3` now returns `{:ok, [{sop_class_uid, sop_instance_uid, data}]}` (was `{:ok, [String.t()]}`)
+- **Breaking**: `handle_get/3` now returns `{:ok, [{sop_class_uid, sop_instance_uid, data}]}` (was `{:ok, [binary()]}`)
+- `MoveOriginatorMessageID` tag (0000,1031) added to command VR map for correct US encoding
+
 ### Fixed
 
 - SCU requests now fail closed when no negotiated presentation context matches the requested SOP Class
 - `Dimse.find/4` now returns an explicit cancellation error when a peer ends the operation with status `0xFE00`
-- README and module docs now describe `C-MOVE` and `C-GET` as unimplemented placeholders instead of shipped features
 
 ## [0.3.0] - 2026-03-18
 
@@ -63,7 +86,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Telemetry event definitions for association lifecycle and PDU I/O
 - CI workflow with Elixir 1.16/1.17/1.18 matrix
 
-[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Balneario-de-Cofrentes/dimse/releases/tag/v0.1.0
