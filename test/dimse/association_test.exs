@@ -4,6 +4,9 @@ defmodule Dimse.AssociationTest do
   alias Dimse.Association
   alias Dimse.Association.{State, Config}
 
+  @verification_uid "1.2.840.10008.1.1"
+  @ct_image_storage "1.2.840.10008.5.1.4.1.1.2"
+
   describe "start_link/1" do
     test "starts a GenServer process in idle phase" do
       assert {:ok, pid} = Association.start_link([])
@@ -24,6 +27,26 @@ defmodule Dimse.AssociationTest do
       {:ok, pid} = Association.start_link([])
       assert {:error, :not_established} = Association.request(pid, %{}, nil, 1_000)
       GenServer.stop(pid)
+    end
+
+    test "returns :no_accepted_context when no negotiated presentation context matches" do
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: Dimse.Scp.Echo)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "TEST_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@verification_uid]
+        )
+
+      assert :ok = wait_for_established(assoc)
+
+      assert {:error, :no_accepted_context} =
+               Dimse.store(assoc, @ct_image_storage, "1.2.3", <<1, 2, 3>>, timeout: 1_000)
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
     end
   end
 
@@ -58,6 +81,7 @@ defmodule Dimse.AssociationTest do
       state = %State{}
       assert state.phase == :idle
       assert state.max_pdu_length == 16_384
+      assert state.proposed_contexts == %{}
       assert state.negotiated_contexts == %{}
       assert state.pdu_buffer == <<>>
       assert state.bytes_received == 0
@@ -85,6 +109,26 @@ defmodule Dimse.AssociationTest do
       assert config.dimse_timeout == 30_000
       assert config.artim_timeout == 30_000
       assert config.num_acceptors == 10
+    end
+  end
+
+  defp wait_for_established(assoc, timeout \\ 2_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_wait_for_established(assoc, deadline)
+  end
+
+  defp do_wait_for_established(assoc, deadline) do
+    if System.monotonic_time(:millisecond) > deadline do
+      flunk("Association did not reach :established within timeout")
+    end
+
+    contexts = Dimse.Association.negotiated_contexts(assoc)
+
+    if map_size(contexts) > 0 do
+      :ok
+    else
+      Process.sleep(10)
+      do_wait_for_established(assoc, deadline)
     end
   end
 end

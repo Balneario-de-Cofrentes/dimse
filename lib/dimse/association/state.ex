@@ -10,6 +10,18 @@ defmodule Dimse.Association.State do
 
   @type phase :: :idle | :negotiating | :established | :releasing | :closed
 
+  @type sub_operation :: %{
+          type: :c_get | :c_move,
+          message_id: integer(),
+          context_id: pos_integer(),
+          sop_class_uid: String.t(),
+          remaining: [{String.t(), String.t(), binary()}],
+          completed: non_neg_integer(),
+          failed: non_neg_integer(),
+          warning: non_neg_integer(),
+          sub_assoc: pid() | nil
+        }
+
   @type t :: %__MODULE__{
           phase: phase(),
           socket: :inet.socket() | nil,
@@ -17,6 +29,7 @@ defmodule Dimse.Association.State do
           remote_ae_title: String.t() | nil,
           local_ae_title: String.t() | nil,
           max_pdu_length: pos_integer(),
+          proposed_contexts: %{pos_integer() => String.t()},
           negotiated_contexts: %{pos_integer() => {String.t(), String.t()}},
           implementation_uid: String.t() | nil,
           implementation_version: String.t() | nil,
@@ -32,7 +45,9 @@ defmodule Dimse.Association.State do
           pending_release: GenServer.from() | nil,
           artim_timer: reference() | nil,
           collecting_results: boolean(),
-          pending_results: [binary()]
+          pending_results: [binary()],
+          sub_operation: sub_operation() | nil,
+          get_mode: boolean()
         }
 
   defstruct phase: :idle,
@@ -41,6 +56,7 @@ defmodule Dimse.Association.State do
             remote_ae_title: nil,
             local_ae_title: nil,
             max_pdu_length: 16_384,
+            proposed_contexts: %{},
             negotiated_contexts: %{},
             implementation_uid: nil,
             implementation_version: nil,
@@ -56,5 +72,7 @@ defmodule Dimse.Association.State do
             pending_release: nil,
             artim_timer: nil,
             collecting_results: false,
-            pending_results: []
+            pending_results: [],
+            sub_operation: nil,
+            get_mode: false
 end

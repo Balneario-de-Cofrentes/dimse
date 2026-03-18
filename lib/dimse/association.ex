@@ -22,7 +22,7 @@ defmodule Dimse.Association do
   alias Dimse.Command.Fields
 
   @implementation_uid "1.2.826.0.1.3680043.8.498.1"
-  @implementation_version "DIMSE_0.3.0"
+  @implementation_version "DIMSE_0.4.0"
 
   @default_transfer_syntaxes MapSet.new([
                                "1.2.840.10008.1.2",
@@ -64,6 +64,22 @@ defmodule Dimse.Association do
           {:ok, map(), [binary()]} | {:error, term()}
   def find_request(pid, command_set, data, timeout \\ 30_000) do
     GenServer.call(pid, {:dimse_find_request, command_set, data}, timeout)
+  end
+
+  @doc """
+  Sends a DIMSE command that expects multiple responses with interleaved
+  C-STORE sub-operations (C-GET).
+
+  The SCU enters `get_mode`, which auto-accepts incoming C-STORE-RQ messages
+  (sent by the SCP as sub-operations) and accumulates their data sets. The
+  final C-GET-RSP ends the retrieval.
+
+  Returns `{:ok, final_command, [binary()]}` or `{:error, term()}`.
+  """
+  @spec get_request(pid(), map(), binary(), timeout()) ::
+          {:ok, map(), [binary()]} | {:error, term()}
+  def get_request(pid, command_set, data, timeout \\ 30_000) do
+    GenServer.call(pid, {:dimse_get_request, command_set, data}, timeout)
   end
 
   @doc """
@@ -173,12 +189,15 @@ defmodule Dimse.Association do
            timeout
          ) do
       {:ok, socket} ->
+        proposed_contexts = proposed_contexts(abstract_syntaxes)
+
         new_state = %{
           state
           | socket: socket,
             transport: :gen_tcp,
             local_ae_title: calling_ae,
             remote_ae_title: called_ae,
+            proposed_contexts: proposed_contexts,
             phase: :negotiating
         }
 
@@ -220,6 +239,23 @@ defmodule Dimse.Association do
       ) do
     send_dimse_request(command_set, data, state, fn ->
       {:noreply, %{state | pending_request: from, collecting_results: true, pending_results: []}}
+    end)
+  end
+
+  def handle_call(
+        {:dimse_get_request, command_set, data},
+        from,
+        %{phase: :established} = state
+      ) do
+    send_dimse_request(command_set, data, state, fn ->
+      {:noreply,
+       %{
+         state
+         | pending_request: from,
+           collecting_results: true,
+           pending_results: [],
+           get_mode: true
+       }}
     end)
   end
 
@@ -292,6 +328,81 @@ defmodule Dimse.Association do
   def handle_info(:artim_timeout, state) do
     send_pdu(state, %Pdu.Abort{source: 2, reason: 0})
     close_connection(state, :artim_timeout)
+  end
+
+  # Sub-operation processing for C-GET and C-MOVE SCP
+  def handle_info({:sub_operation, :next}, %{sub_operation: nil} = state) do
+    {:noreply, state}
+  end
+
+  def handle_info({:sub_operation, :next}, %{sub_operation: sub_op} = state) do
+    case sub_op.remaining do
+      [] ->
+        # All sub-operations complete — send final response
+        send_sub_op_final_response(sub_op, state)
+
+        # Clean up sub-association for C-MOVE
+        if sub_op.sub_assoc, do: Dimse.Scu.release(sub_op.sub_assoc, 5_000)
+
+        {:noreply, %{state | sub_operation: nil}}
+
+      [{sop_class, sop_instance, data} | rest] ->
+        updated_sub_op = %{sub_op | remaining: rest}
+
+        case sub_op.type do
+          :c_get ->
+            # Send C-STORE-RQ on the same association
+            store_message_id = System.unique_integer([:positive]) |> Bitwise.band(0xFFFF)
+
+            store_command = %{
+              {0x0000, 0x0002} => sop_class,
+              {0x0000, 0x0100} => Fields.c_store_rq(),
+              {0x0000, 0x0110} => store_message_id,
+              {0x0000, 0x0700} => 0x0000,
+              {0x0000, 0x0800} => 0x0000,
+              {0x0000, 0x1000} => sop_instance
+            }
+
+            context_id = find_context_id(state.negotiated_contexts, sop_class)
+
+            if context_id do
+              pdus = Message.fragment(store_command, data, context_id, state.max_pdu_length)
+              Enum.each(pdus, &send_pdu(state, &1))
+              # Wait for C-STORE-RSP — it will arrive via handle_response
+              {:noreply, %{state | sub_operation: updated_sub_op}}
+            else
+              # No accepted context for this SOP class — count as failed
+              failed_sub_op = %{updated_sub_op | failed: updated_sub_op.failed + 1}
+              send_sub_op_pending_response(failed_sub_op, state)
+              Process.send(self(), {:sub_operation, :next}, [])
+              {:noreply, %{state | sub_operation: failed_sub_op}}
+            end
+
+          :c_move ->
+            # Send C-STORE via outbound sub-association
+            case Dimse.Scu.Store.send(
+                   sub_op.sub_assoc,
+                   sop_class,
+                   sop_instance,
+                   data,
+                   move_originator_ae: state.remote_ae_title,
+                   move_originator_message_id: sub_op.message_id,
+                   timeout: 30_000
+                 ) do
+              :ok ->
+                completed_sub_op = %{updated_sub_op | completed: updated_sub_op.completed + 1}
+                send_sub_op_pending_response(completed_sub_op, state)
+                Process.send(self(), {:sub_operation, :next}, [])
+                {:noreply, %{state | sub_operation: completed_sub_op}}
+
+              {:error, _reason} ->
+                failed_sub_op = %{updated_sub_op | failed: updated_sub_op.failed + 1}
+                send_sub_op_pending_response(failed_sub_op, state)
+                Process.send(self(), {:sub_operation, :next}, [])
+                {:noreply, %{state | sub_operation: failed_sub_op}}
+            end
+        end
+    end
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
@@ -454,10 +565,10 @@ defmodule Dimse.Association do
     accepted =
       for %Pdu.PresentationContext{id: id, result: 0, transfer_syntaxes: [ts | _]} <-
             ac.presentation_contexts,
+          sop_class_uid = Map.get(state.proposed_contexts, id),
+          not is_nil(sop_class_uid),
           into: %{} do
-        # We need the abstract syntax from our original proposal — use a lookup
-        # For now, store the transfer syntax; the abstract syntax comes from context
-        {id, {nil, ts}}
+        {id, {sop_class_uid, ts}}
       end
 
     remote_max_pdu =
@@ -507,24 +618,66 @@ defmodule Dimse.Association do
     command_field = Command.command_field(message.command)
 
     cond do
+      # C-STORE-RQ received while in get_mode (SCU receiving C-STORE sub-ops during C-GET)
+      state.get_mode && command_field == Fields.c_store_rq() ->
+        handle_get_mode_store(message, state, remaining_pdvs)
+
       Fields.response?(command_field) ->
         handle_response(message, state, remaining_pdvs)
 
-      Fields.request?(command_field) ->
+      Fields.request?(command_field) and request_on_negotiated_context?(message, state) ->
         dispatch_scp_request(message, state, remaining_pdvs)
+
+      Fields.request?(command_field) ->
+        send_pdu(state, %Pdu.Abort{source: 2, reason: 6})
+        {:stop, :invalid_presentation_context, state}
 
       true ->
         {:stop, :unexpected_command, state}
     end
   end
 
-  defp handle_response(_message, %{pending_request: nil} = state, remaining_pdvs) do
+  defp handle_response(
+         _message,
+         %{pending_request: nil, sub_operation: nil} = state,
+         remaining_pdvs
+       ) do
     # Late response with no pending request -- ignore (e.g., after C-CANCEL)
     process_pdv_items(remaining_pdvs, state)
   end
 
+  defp handle_response(
+         message,
+         %{sub_operation: %{type: :c_get} = sub_op} = state,
+         remaining_pdvs
+       ) do
+    # C-STORE-RSP during C-GET SCP sub-operations
+    command_field = Command.command_field(message.command)
+
+    if command_field == Fields.c_store_rsp() do
+      status = Command.status(message.command)
+
+      updated_sub_op =
+        case Command.Status.category(status) do
+          :success -> %{sub_op | completed: sub_op.completed + 1}
+          :warning -> %{sub_op | warning: sub_op.warning + 1}
+          _ -> %{sub_op | failed: sub_op.failed + 1}
+        end
+
+      # Send C-GET-RSP Pending with updated sub-op counts
+      send_sub_op_pending_response(updated_sub_op, state)
+
+      # Trigger next sub-operation
+      Process.send(self(), {:sub_operation, :next}, [])
+      process_pdv_items(remaining_pdvs, %{state | sub_operation: updated_sub_op})
+    else
+      # Not a C-STORE-RSP — unexpected during sub-operation, ignore
+      process_pdv_items(remaining_pdvs, state)
+    end
+  end
+
   defp handle_response(message, %{collecting_results: true} = state, remaining_pdvs) do
-    # Multi-response collection (C-FIND)
+    # Multi-response collection (C-FIND, C-MOVE SCU)
     handle_multi_response(message, state, remaining_pdvs)
   end
 
@@ -556,7 +709,8 @@ defmodule Dimse.Association do
           state
           | pending_request: nil,
             collecting_results: false,
-            pending_results: []
+            pending_results: [],
+            get_mode: false
         }
 
         process_pdv_items(remaining_pdvs, new_state)
@@ -598,6 +752,14 @@ defmodule Dimse.Association do
             {:error, status, _msg} -> {status, nil}
           end
 
+        0x0010 ->
+          # C-GET-RQ
+          dispatch_get_request(handler, message, state)
+
+        0x0021 ->
+          # C-MOVE-RQ
+          dispatch_move_request(handler, message, state)
+
         0x0FFF ->
           # C-CANCEL-RQ (PS3.7 §9.3.2.3) — cancels a pending C-FIND/C-MOVE/C-GET.
           # With synchronous handlers, if we're processing this, the operation
@@ -612,6 +774,7 @@ defmodule Dimse.Association do
     duration = System.monotonic_time(:millisecond) - start_time
 
     # C-CANCEL has no response; skip response for :no_response
+    # :async_sub_operation means sub-ops are being processed via handle_info
     case result do
       :no_response ->
         Telemetry.emit(:command_stop, %{duration: duration}, %{
@@ -619,6 +782,17 @@ defmodule Dimse.Association do
           command_field: command_field,
           status: :cancelled
         })
+
+        process_pdv_items(remaining_pdvs, state)
+
+      {:async_sub_operation, new_state} ->
+        Telemetry.emit(:command_stop, %{duration: duration}, %{
+          association_id: state.association_id,
+          command_field: command_field,
+          status: :sub_operations
+        })
+
+        process_pdv_items(remaining_pdvs, new_state)
 
       {status, response_data} ->
         Telemetry.emit(:command_stop, %{duration: duration}, %{
@@ -648,9 +822,8 @@ defmodule Dimse.Association do
           )
 
         Enum.each(pdus, &send_pdu(state, &1))
+        process_pdv_items(remaining_pdvs, state)
     end
-
-    process_pdv_items(remaining_pdvs, state)
   end
 
   defp send_find_results(results, message, state) do
@@ -673,6 +846,187 @@ defmodule Dimse.Association do
     # Final success (no data set)
     {0x0000, nil}
   end
+
+  # --- C-GET SCU: handle incoming C-STORE-RQ in get_mode ---
+
+  defp handle_get_mode_store(message, state, remaining_pdvs) do
+    message_id = Command.message_id(message.command) || 0
+
+    store_rsp =
+      %{
+        {0x0000, 0x0002} => Command.affected_sop_class_uid(message.command) || "",
+        {0x0000, 0x0100} => Fields.c_store_rsp(),
+        {0x0000, 0x0120} => message_id,
+        {0x0000, 0x0800} => 0x0101,
+        {0x0000, 0x0900} => 0x0000
+      }
+      |> maybe_put_instance_uid(0x0001, message.command)
+
+    pdus = Message.fragment(store_rsp, nil, message.context_id, state.max_pdu_length)
+    Enum.each(pdus, &send_pdu(state, &1))
+
+    new_results =
+      if message.data,
+        do: [message.data | state.pending_results],
+        else: state.pending_results
+
+    process_pdv_items(remaining_pdvs, %{state | pending_results: new_results})
+  end
+
+  # --- C-GET SCP dispatch ---
+
+  defp dispatch_get_request(handler, message, state) do
+    case handler.handle_get(message.command, message.data, state) do
+      {:ok, []} ->
+        {0x0000, nil}
+
+      {:ok, instances} ->
+        sop_class_uid = Command.affected_sop_class_uid(message.command) || ""
+        message_id = Command.message_id(message.command) || 0
+
+        sub_op = %{
+          type: :c_get,
+          message_id: message_id,
+          context_id: message.context_id,
+          sop_class_uid: sop_class_uid,
+          remaining: instances,
+          completed: 0,
+          failed: 0,
+          warning: 0,
+          sub_assoc: nil
+        }
+
+        Process.send(self(), {:sub_operation, :next}, [])
+        {:async_sub_operation, %{state | sub_operation: sub_op}}
+
+      {:error, status, _msg} ->
+        {status, nil}
+    end
+  end
+
+  # --- C-MOVE SCP dispatch ---
+
+  defp dispatch_move_request(handler, message, state) do
+    move_destination = Map.get(message.command, {0x0000, 0x0600}, "")
+
+    case handler.handle_move(message.command, message.data, state) do
+      {:ok, []} ->
+        {0x0000, nil}
+
+      {:ok, instances} ->
+        resolve_result =
+          if function_exported?(handler, :resolve_ae, 1) do
+            handler.resolve_ae(move_destination)
+          else
+            {:error, :unknown_ae}
+          end
+
+        case resolve_result do
+          {:ok, {host, port}} ->
+            sop_classes = instances |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
+
+            case Dimse.Scu.open(host, port,
+                   calling_ae: state.local_ae_title,
+                   called_ae: move_destination,
+                   abstract_syntaxes: sop_classes,
+                   timeout: 5_000
+                 ) do
+              {:ok, sub_assoc} ->
+                wait_for_sub_assoc(sub_assoc)
+
+                sop_class_uid = Command.affected_sop_class_uid(message.command) || ""
+                message_id = Command.message_id(message.command) || 0
+
+                sub_op = %{
+                  type: :c_move,
+                  message_id: message_id,
+                  context_id: message.context_id,
+                  sop_class_uid: sop_class_uid,
+                  remaining: instances,
+                  completed: 0,
+                  failed: 0,
+                  warning: 0,
+                  sub_assoc: sub_assoc
+                }
+
+                Process.send(self(), {:sub_operation, :next}, [])
+                {:async_sub_operation, %{state | sub_operation: sub_op}}
+
+              {:error, _reason} ->
+                {0xA801, nil}
+            end
+
+          {:error, _} ->
+            {0xA801, nil}
+        end
+
+      {:error, status, _msg} ->
+        {status, nil}
+    end
+  end
+
+  defp wait_for_sub_assoc(assoc, timeout \\ 2_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_wait_sub_assoc(assoc, deadline)
+  end
+
+  defp do_wait_sub_assoc(assoc, deadline) do
+    if System.monotonic_time(:millisecond) > deadline do
+      :timeout
+    else
+      case Dimse.Association.negotiated_contexts(assoc) do
+        contexts when map_size(contexts) > 0 ->
+          :ok
+
+        _ ->
+          Process.sleep(5)
+          do_wait_sub_assoc(assoc, deadline)
+      end
+    end
+  end
+
+  # --- Sub-operation response helpers ---
+
+  defp send_sub_op_pending_response(sub_op, state) do
+    total = length(sub_op.remaining)
+
+    pending_command = %{
+      {0x0000, 0x0002} => sub_op.sop_class_uid,
+      {0x0000, 0x0100} => sub_op_response_field(sub_op.type),
+      {0x0000, 0x0120} => sub_op.message_id,
+      {0x0000, 0x0800} => 0x0101,
+      {0x0000, 0x0900} => 0xFF00,
+      {0x0000, 0x1020} => total,
+      {0x0000, 0x1021} => sub_op.completed,
+      {0x0000, 0x1022} => sub_op.failed,
+      {0x0000, 0x1023} => sub_op.warning
+    }
+
+    pdus = Message.fragment(pending_command, nil, sub_op.context_id, state.max_pdu_length)
+    Enum.each(pdus, &send_pdu(state, &1))
+  end
+
+  defp send_sub_op_final_response(sub_op, state) do
+    final_status = if sub_op.failed > 0, do: 0xB000, else: 0x0000
+
+    final_command = %{
+      {0x0000, 0x0002} => sub_op.sop_class_uid,
+      {0x0000, 0x0100} => sub_op_response_field(sub_op.type),
+      {0x0000, 0x0120} => sub_op.message_id,
+      {0x0000, 0x0800} => 0x0101,
+      {0x0000, 0x0900} => final_status,
+      {0x0000, 0x1020} => 0,
+      {0x0000, 0x1021} => sub_op.completed,
+      {0x0000, 0x1022} => sub_op.failed,
+      {0x0000, 0x1023} => sub_op.warning
+    }
+
+    pdus = Message.fragment(final_command, nil, sub_op.context_id, state.max_pdu_length)
+    Enum.each(pdus, &send_pdu(state, &1))
+  end
+
+  defp sub_op_response_field(:c_get), do: Fields.c_get_rsp()
+  defp sub_op_response_field(:c_move), do: Fields.c_move_rsp()
 
   # --- Socket I/O ---
 
@@ -778,9 +1132,21 @@ defmodule Dimse.Association do
   defp find_context_id(contexts, sop_class) do
     Enum.find_value(contexts, fn
       {id, {^sop_class, _ts}} -> id
-      {id, {nil, _ts}} -> id
       _ -> nil
     end)
+  end
+
+  defp request_on_negotiated_context?(%Message{context_id: context_id, command: command}, state) do
+    case Map.get(state.negotiated_contexts, context_id) do
+      {abstract_syntax, _transfer_syntax} ->
+        case Command.affected_sop_class_uid(command) do
+          nil -> true
+          sop_class_uid -> sop_class_uid == abstract_syntax
+        end
+
+      nil ->
+        false
+    end
   end
 
   defp get_in_user_info(%{user_information: %Pdu.UserInformation{} = ui}, field) do
@@ -791,6 +1157,12 @@ defmodule Dimse.Association do
 
   defp generate_id do
     :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+  end
+
+  defp proposed_contexts(abstract_syntaxes) do
+    abstract_syntaxes
+    |> Enum.with_index(1)
+    |> Map.new(fn {abstract_syntax, idx} -> {idx * 2 - 1, abstract_syntax} end)
   end
 
   # C-STORE-RSP must echo back the AffectedSOPInstanceUID (PS3.7 Table 9.1-1)

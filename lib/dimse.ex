@@ -19,7 +19,7 @@ defmodule Dimse do
       :ok = Dimse.store(assoc, sop_class_uid, sop_instance_uid, data_set)
       {:ok, results} = Dimse.find(assoc, :study, query_data, timeout: 30_000)
       :ok = Dimse.cancel(assoc, message_id)
-      :ok = Dimse.move(assoc, :study, query, dest_ae: "DEST_AE")
+      {:ok, result} = Dimse.move(assoc, :study, query, dest_ae: "DEST_AE")
       {:ok, data_sets} = Dimse.get(assoc, :study, query)
       :ok = Dimse.release(assoc)
       :ok = Dimse.abort(assoc)
@@ -126,7 +126,7 @@ defmodule Dimse do
     * `:timeout` — response timeout in ms (default: `30_000`)
   """
   @spec find(pid(), String.t() | atom(), binary(), keyword()) ::
-          {:ok, [binary()]} | {:error, term()}
+          {:ok, [binary()]} | {:error, {:cancelled, [binary()]} | term()}
   def find(assoc, sop_class_or_level, query_data, opts \\ []) do
     sop_class_uid = resolve_find_sop_class(sop_class_or_level)
 
@@ -147,18 +147,86 @@ defmodule Dimse do
     Dimse.Association.cancel(assoc, message_id)
   end
 
-  @doc "Sends a C-MOVE request to retrieve studies to a destination AE."
-  @spec move(pid(), atom(), term(), keyword()) :: :ok | {:error, term()}
-  def move(_assoc, _level, _query, _opts \\ []), do: {:error, :not_implemented}
+  @doc """
+  Sends a C-MOVE request to retrieve instances to a destination AE.
 
-  @doc "Sends a C-GET request to retrieve studies on the same association."
-  @spec get(pid(), atom(), term()) :: {:ok, [term()]} | {:error, term()}
-  def get(_assoc, _level, _query), do: {:error, :not_implemented}
+  The SCP pushes matching instances to the destination AE via C-STORE
+  sub-operations and reports sub-operation counts in the response.
+
+  ## Parameters
+
+    * `assoc` — association pid from `Dimse.connect/3`
+    * `sop_class_or_level` — SOP Class UID string, or query level atom
+      (`:patient`, `:study`)
+    * `query_data` — encoded query identifier data set
+
+  ## Options
+
+    * `:dest_ae` — destination AE title (required)
+    * `:priority` — request priority (default: `0x0000` medium)
+    * `:timeout` — response timeout in ms (default: `30_000`)
+
+  Returns `{:ok, %{completed: n, failed: n, warning: n}}` on success.
+  """
+  @spec move(pid(), String.t() | atom(), binary(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def move(assoc, sop_class_or_level, query_data, opts \\ []) do
+    sop_class_uid = resolve_move_sop_class(sop_class_or_level)
+    dest_ae = Keyword.fetch!(opts, :dest_ae)
+
+    if sop_class_uid do
+      Dimse.Scu.Move.retrieve(assoc, sop_class_uid, query_data, dest_ae, opts)
+    else
+      {:error, {:unknown_query_level, sop_class_or_level}}
+    end
+  end
+
+  @doc """
+  Sends a C-GET request to retrieve instances on the same association.
+
+  The SCP sends matching instances back as C-STORE sub-operations on the
+  same association. The SCU auto-accepts and returns the data sets.
+
+  ## Parameters
+
+    * `assoc` — association pid from `Dimse.connect/3`
+    * `sop_class_or_level` — SOP Class UID string, or query level atom
+      (`:patient`, `:study`)
+    * `query_data` — encoded query identifier data set
+
+  ## Options
+
+    * `:priority` — request priority (default: `0x0000` medium)
+    * `:timeout` — response timeout in ms (default: `30_000`)
+
+  Returns `{:ok, [binary()]}` with the received data sets.
+  """
+  @spec get(pid(), String.t() | atom(), binary(), keyword()) ::
+          {:ok, [binary()]} | {:error, term()}
+  def get(assoc, sop_class_or_level, query_data, opts \\ []) do
+    sop_class_uid = resolve_get_sop_class(sop_class_or_level)
+
+    if sop_class_uid do
+      Dimse.Scu.Get.retrieve(assoc, sop_class_uid, query_data, opts)
+    else
+      {:error, {:unknown_query_level, sop_class_or_level}}
+    end
+  end
 
   defp resolve_find_sop_class(level) when is_atom(level),
     do: Dimse.Scu.Find.sop_class_uid(level)
 
   defp resolve_find_sop_class(uid) when is_binary(uid), do: uid
+
+  defp resolve_move_sop_class(level) when is_atom(level),
+    do: Dimse.Scu.Move.sop_class_uid(level)
+
+  defp resolve_move_sop_class(uid) when is_binary(uid), do: uid
+
+  defp resolve_get_sop_class(level) when is_atom(level),
+    do: Dimse.Scu.Get.sop_class_uid(level)
+
+  defp resolve_get_sop_class(uid) when is_binary(uid), do: uid
 
   @doc "Sends an A-RELEASE-RQ to gracefully close the association."
   @spec release(pid(), timeout()) :: :ok | {:error, term()}

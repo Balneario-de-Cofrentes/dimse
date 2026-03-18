@@ -5,6 +5,8 @@ defmodule Dimse.IntegrationTest do
 
   @ct_image_storage "1.2.840.10008.5.1.4.1.1.2"
   @study_root_find "1.2.840.10008.5.1.4.1.2.2.1"
+  @study_root_get "1.2.840.10008.5.1.4.1.2.2.3"
+  @study_root_move "1.2.840.10008.5.1.4.1.2.2.2"
 
   defp wait_for_established(assoc, timeout \\ 2_000) do
     deadline = System.monotonic_time(:millisecond) + timeout
@@ -437,6 +439,289 @@ defmodule Dimse.IntegrationTest do
     end
   end
 
+  describe "C-GET end-to-end" do
+    test "SCU receives instances via C-GET on same association" do
+      test_pid = self()
+      instance1 = :crypto.strong_rand_bytes(128)
+      instance2 = :crypto.strong_rand_bytes(256)
+
+      instances = [
+        {"1.2.840.10008.5.1.4.1.1.2", "1.2.3.4.1", instance1},
+        {"1.2.840.10008.5.1.4.1.1.2", "1.2.3.4.2", instance2}
+      ]
+
+      handler = get_handler(test_pid, instances)
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "GET_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@study_root_get, @ct_image_storage]
+        )
+
+      wait_for_established(assoc)
+
+      query_data = :crypto.strong_rand_bytes(32)
+      assert {:ok, results} = Dimse.get(assoc, :study, query_data, timeout: 10_000)
+
+      assert length(results) == 2
+      assert Enum.at(results, 0) == instance1
+      assert Enum.at(results, 1) == instance2
+
+      assert_receive {:get_query, ^query_data}, 2_000
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+
+    test "empty C-GET results return empty list" do
+      test_pid = self()
+      handler = get_handler(test_pid, [])
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "GET_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@study_root_get, @ct_image_storage]
+        )
+
+      wait_for_established(assoc)
+
+      assert {:ok, []} = Dimse.get(assoc, :study, <<>>, timeout: 5_000)
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+
+    test "C-GET handler error returns failure" do
+      test_pid = self()
+      handler = get_error_handler(test_pid)
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "GET_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@study_root_get, @ct_image_storage]
+        )
+
+      wait_for_established(assoc)
+
+      assert {:error, {:status, 0xA700}} = Dimse.get(assoc, :study, <<>>, timeout: 5_000)
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+
+    test "C-GET with echo on same association" do
+      test_pid = self()
+      instance1 = :crypto.strong_rand_bytes(64)
+
+      instances = [{"1.2.840.10008.5.1.4.1.1.2", "1.2.3.4.1", instance1}]
+      handler = get_echo_handler(test_pid, instances)
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "GET_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: ["1.2.840.10008.1.1", @study_root_get, @ct_image_storage]
+        )
+
+      wait_for_established(assoc)
+
+      assert :ok = Dimse.echo(assoc, timeout: 5_000)
+      assert {:ok, [^instance1]} = Dimse.get(assoc, :study, <<>>, timeout: 10_000)
+      assert :ok = Dimse.echo(assoc, timeout: 5_000)
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+  end
+
+  describe "C-MOVE end-to-end" do
+    test "SCU sends C-MOVE-RQ and destination SCP receives C-STORE" do
+      test_pid = self()
+
+      # Start destination SCP first
+      dest_handler = store_dest_handler(test_pid)
+      {:ok, dest_ref} = Dimse.start_listener(port: 0, handler: dest_handler)
+      dest_port = :ranch.get_port(dest_ref)
+
+      instance1 = :crypto.strong_rand_bytes(128)
+      instance2 = :crypto.strong_rand_bytes(256)
+
+      instances = [
+        {"1.2.840.10008.5.1.4.1.1.2", "1.2.3.4.1", instance1},
+        {"1.2.840.10008.5.1.4.1.1.2", "1.2.3.4.2", instance2}
+      ]
+
+      handler = move_handler(test_pid, instances, dest_port)
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "MOVE_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@study_root_move]
+        )
+
+      wait_for_established(assoc)
+
+      query_data = :crypto.strong_rand_bytes(32)
+
+      assert {:ok, result} =
+               Dimse.move(assoc, :study, query_data, dest_ae: "DEST_SCP", timeout: 10_000)
+
+      assert result.completed == 2
+      assert result.failed == 0
+
+      # Verify destination received the instances
+      assert_receive {:dest_stored, ^instance1}, 5_000
+      assert_receive {:dest_stored, ^instance2}, 5_000
+      assert_receive {:move_query, ^query_data}, 2_000
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+      Dimse.stop_listener(dest_ref)
+    end
+
+    test "empty C-MOVE results return success with zero counts" do
+      test_pid = self()
+
+      dest_handler = store_dest_handler(test_pid)
+      {:ok, dest_ref} = Dimse.start_listener(port: 0, handler: dest_handler)
+      dest_port = :ranch.get_port(dest_ref)
+
+      handler = move_handler(test_pid, [], dest_port)
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "MOVE_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@study_root_move]
+        )
+
+      wait_for_established(assoc)
+
+      assert {:ok, result} =
+               Dimse.move(assoc, :study, <<>>, dest_ae: "DEST_SCP", timeout: 5_000)
+
+      assert result.completed == 0
+      assert result.failed == 0
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+      Dimse.stop_listener(dest_ref)
+    end
+
+    test "C-MOVE handler error returns failure" do
+      test_pid = self()
+      handler = move_error_handler(test_pid)
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "MOVE_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@study_root_move]
+        )
+
+      wait_for_established(assoc)
+
+      assert {:error, {:status, 0xA700}} =
+               Dimse.move(assoc, :study, <<>>, dest_ae: "DEST_SCP", timeout: 5_000)
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+
+    test "C-MOVE resolve_ae failure returns error" do
+      test_pid = self()
+
+      instance1 = :crypto.strong_rand_bytes(64)
+      instances = [{"1.2.840.10008.5.1.4.1.1.2", "1.2.3.4.1", instance1}]
+
+      # Use port 0 — resolve_ae will return unknown_ae error
+      handler = move_unknown_dest_handler(test_pid, instances)
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "MOVE_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@study_root_move]
+        )
+
+      wait_for_established(assoc)
+
+      assert {:error, {:status, status}} =
+               Dimse.move(assoc, :study, <<>>, dest_ae: "UNKNOWN_AE", timeout: 5_000)
+
+      # 0xA801 = Move Destination unknown (PS3.4 Table C.4-2)
+      assert status == 0xA801
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+
+    test "C-MOVE with echo on same association" do
+      test_pid = self()
+
+      dest_handler = store_dest_handler(test_pid)
+      {:ok, dest_ref} = Dimse.start_listener(port: 0, handler: dest_handler)
+      dest_port = :ranch.get_port(dest_ref)
+
+      instance1 = :crypto.strong_rand_bytes(64)
+      instances = [{"1.2.840.10008.5.1.4.1.1.2", "1.2.3.4.1", instance1}]
+      handler = move_echo_handler(test_pid, instances, dest_port)
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "MOVE_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: ["1.2.840.10008.1.1", @study_root_move]
+        )
+
+      wait_for_established(assoc)
+
+      assert :ok = Dimse.echo(assoc, timeout: 5_000)
+
+      assert {:ok, result} =
+               Dimse.move(assoc, :study, <<>>, dest_ae: "DEST_SCP", timeout: 10_000)
+
+      assert result.completed == 1
+
+      assert :ok = Dimse.echo(assoc, timeout: 5_000)
+      assert :ok = Dimse.release(assoc, 5_000)
+
+      Dimse.stop_listener(ref)
+      Dimse.stop_listener(dest_ref)
+    end
+  end
+
   # --- Test handler factories ---
 
   defp store_handler(test_pid) do
@@ -622,6 +907,316 @@ defmodule Dimse.IntegrationTest do
           send(unquote(test_pid), :find_called)
           {:ok, unquote(Macro.escape(results))}
         end
+
+        @impl true
+        def handle_move(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_get(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+      end,
+      Macro.Env.location(__ENV__)
+    )
+
+    mod
+  end
+
+  # --- C-GET handler factories ---
+
+  defp get_handler(test_pid, instances) do
+    mod = :"Dimse.Test.GetHandler.#{System.unique_integer([:positive])}"
+
+    Module.create(
+      mod,
+      quote do
+        @behaviour Dimse.Handler
+
+        @impl true
+        def supported_abstract_syntaxes do
+          ["1.2.840.10008.5.1.4.1.2.2.3", "1.2.840.10008.5.1.4.1.1.2"]
+        end
+
+        @impl true
+        def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+        @impl true
+        def handle_store(_command, _data, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_find(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_move(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_get(_command, query, _state) do
+          send(unquote(test_pid), {:get_query, query})
+          {:ok, unquote(Macro.escape(instances))}
+        end
+      end,
+      Macro.Env.location(__ENV__)
+    )
+
+    mod
+  end
+
+  defp get_error_handler(test_pid) do
+    mod = :"Dimse.Test.GetErrorHandler.#{System.unique_integer([:positive])}"
+
+    Module.create(
+      mod,
+      quote do
+        @behaviour Dimse.Handler
+
+        @impl true
+        def supported_abstract_syntaxes do
+          ["1.2.840.10008.5.1.4.1.2.2.3", "1.2.840.10008.5.1.4.1.1.2"]
+        end
+
+        @impl true
+        def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+        @impl true
+        def handle_store(_command, _data, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_find(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_move(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_get(_command, _query, _state) do
+          send(unquote(test_pid), :get_error_called)
+          {:error, 0xA700, "out of resources"}
+        end
+      end,
+      Macro.Env.location(__ENV__)
+    )
+
+    mod
+  end
+
+  defp get_echo_handler(test_pid, instances) do
+    mod = :"Dimse.Test.GetEchoHandler.#{System.unique_integer([:positive])}"
+
+    Module.create(
+      mod,
+      quote do
+        @behaviour Dimse.Handler
+
+        @impl true
+        def supported_abstract_syntaxes do
+          ["1.2.840.10008.1.1", "1.2.840.10008.5.1.4.1.2.2.3", "1.2.840.10008.5.1.4.1.1.2"]
+        end
+
+        @impl true
+        def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+        @impl true
+        def handle_store(_command, _data, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_find(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_move(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_get(_command, _query, _state) do
+          send(unquote(test_pid), :get_called)
+          {:ok, unquote(Macro.escape(instances))}
+        end
+      end,
+      Macro.Env.location(__ENV__)
+    )
+
+    mod
+  end
+
+  # --- C-MOVE handler factories ---
+
+  defp move_handler(test_pid, instances, dest_port) do
+    mod = :"Dimse.Test.MoveHandler.#{System.unique_integer([:positive])}"
+
+    Module.create(
+      mod,
+      quote do
+        @behaviour Dimse.Handler
+
+        @impl true
+        def supported_abstract_syntaxes do
+          ["1.2.840.10008.5.1.4.1.2.2.2"]
+        end
+
+        @impl true
+        def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+        @impl true
+        def handle_store(_command, _data, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_find(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_move(_command, query, _state) do
+          send(unquote(test_pid), {:move_query, query})
+          {:ok, unquote(Macro.escape(instances))}
+        end
+
+        @impl true
+        def handle_get(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        def resolve_ae("DEST_SCP"), do: {:ok, {"127.0.0.1", unquote(dest_port)}}
+        def resolve_ae(_), do: {:error, :unknown_ae}
+      end,
+      Macro.Env.location(__ENV__)
+    )
+
+    mod
+  end
+
+  defp move_echo_handler(test_pid, instances, dest_port) do
+    mod = :"Dimse.Test.MoveEchoHandler.#{System.unique_integer([:positive])}"
+
+    Module.create(
+      mod,
+      quote do
+        @behaviour Dimse.Handler
+
+        @impl true
+        def supported_abstract_syntaxes do
+          ["1.2.840.10008.1.1", "1.2.840.10008.5.1.4.1.2.2.2"]
+        end
+
+        @impl true
+        def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+        @impl true
+        def handle_store(_command, _data, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_find(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_move(_command, _query, _state) do
+          send(unquote(test_pid), :move_called)
+          {:ok, unquote(Macro.escape(instances))}
+        end
+
+        @impl true
+        def handle_get(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        def resolve_ae("DEST_SCP"), do: {:ok, {"127.0.0.1", unquote(dest_port)}}
+        def resolve_ae(_), do: {:error, :unknown_ae}
+      end,
+      Macro.Env.location(__ENV__)
+    )
+
+    mod
+  end
+
+  defp move_error_handler(test_pid) do
+    mod = :"Dimse.Test.MoveErrorHandler.#{System.unique_integer([:positive])}"
+
+    Module.create(
+      mod,
+      quote do
+        @behaviour Dimse.Handler
+
+        @impl true
+        def supported_abstract_syntaxes do
+          ["1.2.840.10008.5.1.4.1.2.2.2"]
+        end
+
+        @impl true
+        def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+        @impl true
+        def handle_store(_command, _data, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_find(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_move(_command, _query, _state) do
+          send(unquote(test_pid), :move_error_called)
+          {:error, 0xA700, "out of resources"}
+        end
+
+        @impl true
+        def handle_get(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        def resolve_ae(_), do: {:error, :unknown_ae}
+      end,
+      Macro.Env.location(__ENV__)
+    )
+
+    mod
+  end
+
+  defp move_unknown_dest_handler(test_pid, instances) do
+    mod = :"Dimse.Test.MoveUnknownDestHandler.#{System.unique_integer([:positive])}"
+
+    Module.create(
+      mod,
+      quote do
+        @behaviour Dimse.Handler
+
+        @impl true
+        def supported_abstract_syntaxes do
+          ["1.2.840.10008.5.1.4.1.2.2.2"]
+        end
+
+        @impl true
+        def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+        @impl true
+        def handle_store(_command, _data, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_find(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_move(_command, _query, _state) do
+          send(unquote(test_pid), :move_called)
+          {:ok, unquote(Macro.escape(instances))}
+        end
+
+        @impl true
+        def handle_get(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        def resolve_ae(_), do: {:error, :unknown_ae}
+      end,
+      Macro.Env.location(__ENV__)
+    )
+
+    mod
+  end
+
+  defp store_dest_handler(test_pid) do
+    mod = :"Dimse.Test.StoreDestHandler.#{System.unique_integer([:positive])}"
+
+    Module.create(
+      mod,
+      quote do
+        @behaviour Dimse.Handler
+
+        @impl true
+        def supported_abstract_syntaxes do
+          ["1.2.840.10008.5.1.4.1.1.2"]
+        end
+
+        @impl true
+        def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+        @impl true
+        def handle_store(_command, data, _state) do
+          send(unquote(test_pid), {:dest_stored, data})
+          {:ok, 0x0000}
+        end
+
+        @impl true
+        def handle_find(_command, _query, _state), do: {:error, 0xC000, "not supported"}
 
         @impl true
         def handle_move(_command, _query, _state), do: {:error, 0xC000, "not supported"}

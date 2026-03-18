@@ -45,8 +45,8 @@ defmodule Dimse.Scp.Echo do
   def handle_find(_command, _query, _state), do: {:error, 0xC000, "not supported"}
 
   @impl Dimse.Handler
-  def handle_move(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+  def handle_move(_command, _query, _state), do: {:error, 0xA801, "not supported"}
 
   @impl Dimse.Handler
-  def handle_get(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+  def handle_get(_command, _query, _state), do: {:error, 0xA900, "not supported"}
 end

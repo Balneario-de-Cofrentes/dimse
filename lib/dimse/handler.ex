@@ -18,7 +18,7 @@ defmodule Dimse.Handler do
 
         @impl true
         def handle_store(command, data_set, state) do
-          sop_instance_uid = command[{0x0008, 0x0018}]
+          sop_instance_uid = command[{0x0000, 0x1000}]
           # ... persist the instance ...
           {:ok, 0x0000}
         end
@@ -43,7 +43,13 @@ defmodule Dimse.Handler do
 
   ## Callback Return Values
 
-  All callbacks return `{:ok, status_code}` or `{:error, status_code, message}`.
+  - `handle_echo/2` and `handle_store/3` return `{:ok, status_code}` or
+    `{:error, status_code, message}`.
+  - `handle_find/3` returns `{:ok, [identifier_binary()]}` or
+    `{:error, status_code, message}`.
+  - `handle_move/3` and `handle_get/3` return service-specific result lists or
+    `{:error, status_code, message}`.
+
   The status code is a DIMSE status (see `Dimse.Command.Status`).
   """
 
@@ -67,21 +73,31 @@ defmodule Dimse.Handler do
             ) ::
               {:ok, [binary()]} | {:error, integer(), String.t()}
 
-  @doc "Called when a C-MOVE-RQ is received. Return SOP Instance UIDs to transfer."
+  @doc """
+  Called when a C-MOVE-RQ is received.
+
+  Return a list of `{sop_class_uid, sop_instance_uid, data}` tuples to transfer
+  to the move destination via C-STORE sub-operations.
+  """
   @callback handle_move(
               command :: map(),
               query :: binary(),
               state :: Dimse.Association.State.t()
             ) ::
-              {:ok, [String.t()]} | {:error, integer(), String.t()}
+              {:ok, [{String.t(), String.t(), binary()}]} | {:error, integer(), String.t()}
 
-  @doc "Called when a C-GET-RQ is received. Return data sets to send back."
+  @doc """
+  Called when a C-GET-RQ is received.
+
+  Return a list of `{sop_class_uid, sop_instance_uid, data}` tuples to send
+  back on the same association via C-STORE sub-operations.
+  """
   @callback handle_get(
               command :: map(),
               query :: binary(),
               state :: Dimse.Association.State.t()
             ) ::
-              {:ok, [binary()]} | {:error, integer(), String.t()}
+              {:ok, [{String.t(), String.t(), binary()}]} | {:error, integer(), String.t()}
 
   @doc """
   Returns the set of abstract syntaxes (SOP Class UIDs) this handler supports.
@@ -91,7 +107,16 @@ defmodule Dimse.Handler do
   """
   @callback supported_abstract_syntaxes() :: [String.t()]
 
-  @optional_callbacks [supported_abstract_syntaxes: 0]
+  @doc """
+  Resolves a C-MOVE destination AE title to a `{host, port}` tuple.
+
+  Called by the SCP when processing a C-MOVE-RQ to determine where to
+  open the outbound sub-association for C-STORE sub-operations.
+  """
+  @callback resolve_ae(ae_title :: String.t()) ::
+              {:ok, {String.t(), pos_integer()}} | {:error, term()}
+
+  @optional_callbacks [supported_abstract_syntaxes: 0, resolve_ae: 1]
 
   @doc false
   defmacro __using__(_opts) do

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- SCU requests now fail closed when no negotiated presentation context matches the requested SOP Class
+- `Dimse.find/4` now returns an explicit cancellation error when a peer ends the operation with status `0xFE00`
+- README and module docs now describe `C-MOVE` and `C-GET` as unimplemented placeholders instead of shipped features
+
 ## [0.3.0] - 2026-03-18
 
 ### Added

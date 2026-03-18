@@ -18,9 +18,9 @@ one GenServer per association for fault isolation and natural backpressure.
 
 - **Upper Layer Protocol** -- full PDU encode/decode for all 7 PDU types (PS3.8 Section 9.3)
 - **Association state machine** -- GenServer-per-association with ARTIM timer (PS3.8 Section 9.2)
-- **DIMSE-C services** -- C-ECHO, C-STORE, C-FIND, C-MOVE, C-GET
+- **DIMSE-C services** -- C-ECHO, C-STORE, C-FIND
 - **SCP behaviour** -- `Dimse.Handler` callbacks for implementing DICOM servers
-- **SCU client API** -- connect, echo, store, find, move, get, release, abort
+- **SCU client API** -- connect, echo, store, find, cancel, release, abort
 - **Presentation context negotiation** -- abstract syntax + transfer syntax matching
 - **Max PDU length negotiation** -- with automatic message fragmentation
 - **Telemetry** -- `:telemetry`-based events for association lifecycle, PDU, and command metrics
@@ -172,8 +172,8 @@ lib/dimse/
 | C-ECHO  | Yes | Yes | Verification (connectivity test) |
 | C-STORE | Yes | Yes | Store DICOM instances |
 | C-FIND  | Yes | Yes | Query patient/study/series/instance |
-| C-MOVE  | Dispatch | -- | Retrieve via push to third party |
-| C-GET   | Dispatch | -- | Retrieve on same association |
+| C-MOVE  | Callback placeholder | -- | Reserved for future implementation |
+| C-GET   | Callback placeholder | -- | Reserved for future implementation |
 
 ## Testing
 
@@ -205,7 +205,7 @@ pure-Elixir DICOM toolkit:
 | Language | Elixir | Erlang | Elixir |
 | PDU decode/encode | All 7 types | 6/7 (no A-ASSOCIATE-RJ) | 6/7 (no A-ABORT) |
 | Association state machine | 5-phase + ARTIM timer | gen_statem (2 states) | GenServer (4 states) |
-| DIMSE-C services | C-ECHO, C-STORE, C-FIND + framework for MOVE/GET | C-ECHO, C-STORE | C-ECHO, C-STORE, partial C-FIND |
+| DIMSE-C services | C-ECHO, C-STORE, C-FIND | C-ECHO, C-STORE | C-ECHO, C-STORE, partial C-FIND |
 | SCP behaviour | `@behaviour` with 5 callbacks | Hardcoded routing | Event handler callbacks |
 | SCU client | Full API (open/release/abort/echo) | gen_statem sender | No SCU |
 | Max PDU fragmentation | Yes (encode + reassembly) | Yes (sender chunking) | Parsed, not enforced |

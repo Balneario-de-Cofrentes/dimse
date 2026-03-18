@@ -95,7 +95,9 @@ defmodule Dimse.Scu.Find do
     * `:timeout` — response timeout in ms (default: `30_000`)
 
   Returns `{:ok, [binary()]}` with matching data sets on success,
-  `{:error, {:status, code}}` for non-success final status,
+  `{:error, {:cancelled, results}}` when the peer ends the operation with
+  Cancel status after sending partial results,
+  `{:error, {:status, code}}` for other non-success final statuses,
   `{:error, reason}` for transport or protocol errors.
   """
   @spec query(pid(), String.t(), binary(), keyword()) :: {:ok, [binary()]} | {:error, term()}
@@ -108,7 +110,7 @@ defmodule Dimse.Scu.Find do
       {:ok, response, results} ->
         case Dimse.Command.status(response) do
           0x0000 -> {:ok, results}
-          0xFE00 -> {:ok, results}
+          0xFE00 -> {:error, {:cancelled, results}}
           status -> {:error, {:status, status}}
         end
 
