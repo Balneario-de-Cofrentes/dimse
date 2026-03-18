@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.4.0] - 2026-03-18
+## [0.4.1] - 2026-03-18
 
 ### Added
 
@@ -86,8 +86,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Telemetry event definitions for association lifecycle and PDU I/O
 - CI workflow with Elixir 1.16/1.17/1.18 matrix
 
-[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.4.0...HEAD
-[0.4.0]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.3.0...v0.4.0
+[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.3.0...v0.4.1
 [0.3.0]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Balneario-de-Cofrentes/dimse/releases/tag/v0.1.0

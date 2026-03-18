@@ -34,7 +34,7 @@ Add `dimse` to your `mix.exs` dependencies:
 ```elixir
 def deps do
   [
-    {:dimse, "~> 0.4.0"}
+    {:dimse, "~> 0.4.1"}
   ]
 end
 ```
