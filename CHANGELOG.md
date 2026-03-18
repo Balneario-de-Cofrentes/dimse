@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- DRY: extracted `Dimse.Scu.put_if/3` (was `maybe_put/3` duplicated in store, n_get, n_create)
+- DRY: extracted `put_if/3` in Dimse.Scu (was `maybe_put/3` duplicated in store, n_get, n_create)
 - DRY: extracted `Dimse.Tls.normalize_opts/1` (was `normalize_tls_opt/1` duplicated in association, listener)
 - Implementation version bumped to `DIMSE_0.8.0`
 - Test count: 340 → 429 (10 properties + 419 tests), coverage 95.79% → 96%+

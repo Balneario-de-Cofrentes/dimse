@@ -76,8 +76,8 @@ defmodule Dimse.Error do
   after abort). Callers using `Dimse.connect/3` never see raw process exits;
   the SCU layer translates them to `{:error, reason}` tuples.
 
-  If you hold a reference to an association pid directly (e.g., from
-  `Dimse.Association.start/1`), use `Process.monitor/1` to detect
+  If you hold a reference to an association pid directly, use
+  `Process.monitor/1` to detect
   unexpected termination.
 
   ## Error Contract by Operation
