@@ -776,6 +776,41 @@ defmodule Dimse.AssociationTest do
     end
   end
 
+  # Builds a minimal A-ASSOCIATE-RQ PDU proposing Verification SOP Class.
+  defp build_associate_rq do
+    transfer_syntax = "1.2.840.10008.1.2"
+    abstract_syntax = "1.2.840.10008.1.1"
+    app_context_name = "1.2.840.10008.3.1.1.1"
+    impl_uid = "1.2.826.0.1.3680043.8.498.1"
+
+    app_ctx = encode_sub_item(0x10, app_context_name)
+
+    # Presentation Context Item (0x20): id=1, abstract syntax + transfer syntax
+    as_item = encode_sub_item(0x30, abstract_syntax)
+    ts_item = encode_sub_item(0x40, transfer_syntax)
+    pc_item = encode_sub_item(0x20, <<1, 0, 0, 0>> <> as_item <> ts_item)
+
+    # User Information Item (0x50)
+    max_len_item = <<0x51, 0x00, 0, 4, 0, 0, 0x40, 0x00>>
+    impl_uid_item = encode_sub_item(0x52, impl_uid)
+    user_info = encode_sub_item(0x50, max_len_item <> impl_uid_item)
+
+    called = String.pad_trailing("DIMSE", 16)
+    calling = String.pad_trailing("TEST_RAW", 16)
+    reserved32 = :binary.copy(<<0>>, 32)
+
+    payload =
+      <<0x00, 0x01, 0x00, 0x00>> <>
+        called <>
+        calling <>
+        reserved32 <>
+        app_ctx <>
+        pc_item <>
+        user_info
+
+    <<0x01, 0x00, byte_size(payload)::32>> <> payload
+  end
+
   defp wait_for_established(assoc, timeout \\ 2_000) do
     contexts = Dimse.Association.negotiated_contexts(assoc)
 
