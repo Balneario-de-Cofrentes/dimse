@@ -22,7 +22,7 @@ defmodule Dimse.Association do
   alias Dimse.Command.Fields
 
   @implementation_uid "1.2.826.0.1.3680043.8.498.1"
-  @implementation_version "DIMSE_0.8.0"
+  @implementation_version "DIMSE_0.8.1"
 
   @default_transfer_syntaxes MapSet.new([
                                "1.2.840.10008.1.2",
@@ -614,58 +614,78 @@ defmodule Dimse.Association do
       send_pdu(state, %Pdu.AssociateRj{result: 1, source: 1, reason: 1})
       {:stop, :no_accepted_contexts, state}
     else
-      case authenticate_user(rq.user_information, handler, state) do
-        {:ok, user_identity_ac} ->
-          remote_max_pdu =
-            case rq.user_information do
-              %Pdu.UserInformation{max_pdu_length: len} when is_integer(len) and len > 0 -> len
-              _ -> 16_384
-            end
+      case validate_association_request(rq, handler, state) do
+        :ok ->
+          case authenticate_user(rq.user_information, handler, state) do
+            {:ok, user_identity_ac} ->
+              remote_max_pdu =
+                case rq.user_information do
+                  %Pdu.UserInformation{max_pdu_length: len} when is_integer(len) and len > 0 ->
+                    len
 
-          effective_max_pdu = min(remote_max_pdu, state.config.max_pdu_length)
-          role_selections = echo_role_selections(rq.user_information, accepted_map)
+                  _ ->
+                    16_384
+                end
 
-          ac = %Pdu.AssociateAc{
-            protocol_version: 1,
-            called_ae_title: rq.called_ae_title,
-            calling_ae_title: state.local_ae_title,
-            presentation_contexts: result_contexts,
-            user_information: %Pdu.UserInformation{
-              max_pdu_length: state.config.max_pdu_length,
-              implementation_uid: @implementation_uid,
-              implementation_version: @implementation_version,
-              role_selections: role_selections,
-              user_identity_ac: user_identity_ac
-            }
-          }
+              effective_max_pdu = min(remote_max_pdu, state.config.max_pdu_length)
+              role_selections = echo_role_selections(rq.user_information, accepted_map)
 
-          send_pdu(state, ac)
+              ac = %Pdu.AssociateAc{
+                protocol_version: 1,
+                called_ae_title: rq.called_ae_title,
+                calling_ae_title: state.local_ae_title,
+                presentation_contexts: result_contexts,
+                user_information: %Pdu.UserInformation{
+                  max_pdu_length: state.config.max_pdu_length,
+                  implementation_uid: @implementation_uid,
+                  implementation_version: @implementation_version,
+                  role_selections: role_selections,
+                  user_identity_ac: user_identity_ac
+                }
+              }
 
-          negotiation_duration = System.monotonic_time(:millisecond) - negotiation_start
+              send_pdu(state, ac)
 
-          Telemetry.emit_event([:negotiation, :stop], %{duration: negotiation_duration}, %{
-            association_id: state.association_id,
-            mode: :scp,
-            accepted_contexts_count: map_size(accepted_map),
-            rejected_contexts_count: rejected_count,
-            result: :accepted
-          })
+              negotiation_duration = System.monotonic_time(:millisecond) - negotiation_start
 
-          # Emit TLS handshake event if connected over SSL
-          if state.transport == :ranch_ssl,
-            do: emit_tls_handshake(state.socket, state.association_id)
+              Telemetry.emit_event([:negotiation, :stop], %{duration: negotiation_duration}, %{
+                association_id: state.association_id,
+                mode: :scp,
+                accepted_contexts_count: map_size(accepted_map),
+                rejected_contexts_count: rejected_count,
+                result: :accepted
+              })
 
-          {:ok,
-           %{
-             state
-             | phase: :established,
-               remote_ae_title: rq.calling_ae_title,
-               negotiated_contexts: accepted_map,
-               role_selections: roles_to_map(role_selections),
-               max_pdu_length: effective_max_pdu,
-               implementation_uid: get_in_user_info(rq, :implementation_uid),
-               implementation_version: get_in_user_info(rq, :implementation_version)
-           }}
+              # Emit TLS handshake event if connected over SSL
+              if state.transport == :ranch_ssl,
+                do: emit_tls_handshake(state.socket, state.association_id)
+
+              {:ok,
+               %{
+                 state
+                 | phase: :established,
+                   remote_ae_title: rq.calling_ae_title,
+                   negotiated_contexts: accepted_map,
+                   role_selections: roles_to_map(role_selections),
+                   max_pdu_length: effective_max_pdu,
+                   implementation_uid: get_in_user_info(rq, :implementation_uid),
+                   implementation_version: get_in_user_info(rq, :implementation_version)
+               }}
+
+            {:error, _reason} ->
+              negotiation_duration = System.monotonic_time(:millisecond) - negotiation_start
+
+              Telemetry.emit_event([:negotiation, :stop], %{duration: negotiation_duration}, %{
+                association_id: state.association_id,
+                mode: :scp,
+                accepted_contexts_count: 0,
+                rejected_contexts_count: proposed_count,
+                result: :rejected
+              })
+
+              send_pdu(state, %Pdu.AssociateRj{result: 1, source: 1, reason: 1})
+              {:stop, :authentication_failed, state}
+          end
 
         {:error, _reason} ->
           negotiation_duration = System.monotonic_time(:millisecond) - negotiation_start
@@ -679,7 +699,7 @@ defmodule Dimse.Association do
           })
 
           send_pdu(state, %Pdu.AssociateRj{result: 1, source: 1, reason: 1})
-          {:stop, :authentication_failed, state}
+          {:stop, :association_rejected, state}
       end
     end
   end
@@ -780,6 +800,21 @@ defmodule Dimse.Association do
     end
   end
 
+  defp callback_state_for_message(state, %Message{context_id: context_id}) do
+    case Map.get(state.negotiated_contexts, context_id) do
+      {abstract_syntax_uid, transfer_syntax_uid} ->
+        %{
+          state
+          | current_context_id: context_id,
+            current_abstract_syntax_uid: abstract_syntax_uid,
+            current_transfer_syntax_uid: transfer_syntax_uid
+        }
+
+      nil ->
+        %{state | current_context_id: context_id}
+    end
+  end
+
   defp handle_response(
          _message,
          %{pending_request: nil, sub_operation: nil} = state,
@@ -877,8 +912,10 @@ defmodule Dimse.Association do
       case command_field do
         0x0030 ->
           # C-ECHO-RQ
+          callback_state = callback_state_for_message(state, message)
+
           invoke_handler(:handle_echo, command_field, state, fn ->
-            case handler.handle_echo(message.command, state) do
+            case handler.handle_echo(message.command, callback_state) do
               {:ok, status} -> {status, nil, %{}}
               {:error, status, _msg} -> {status, nil, %{}}
             end
@@ -886,8 +923,10 @@ defmodule Dimse.Association do
 
         0x0001 ->
           # C-STORE-RQ
+          callback_state = callback_state_for_message(state, message)
+
           invoke_handler(:handle_store, command_field, state, fn ->
-            case handler.handle_store(message.command, message.data, state) do
+            case handler.handle_store(message.command, message.data, callback_state) do
               {:ok, status} -> {status, nil, %{}}
               {:error, status, _msg} -> {status, nil, %{}}
             end
@@ -895,8 +934,10 @@ defmodule Dimse.Association do
 
         0x0020 ->
           # C-FIND-RQ
+          callback_state = callback_state_for_message(state, message)
+
           invoke_handler(:handle_find, command_field, state, fn ->
-            case handler.handle_find(message.command, message.data, state) do
+            case handler.handle_find(message.command, message.data, callback_state) do
               {:ok, results} -> send_find_results(results, message, state)
               {:error, status, _msg} -> {status, nil, %{}}
             end
@@ -1053,8 +1094,10 @@ defmodule Dimse.Association do
   # --- C-GET SCP dispatch ---
 
   defp dispatch_get_request(handler, message, state) do
+    callback_state = callback_state_for_message(state, message)
+
     case invoke_handler(:handle_get, 0x0010, state, fn ->
-           handler.handle_get(message.command, message.data, state)
+           handler.handle_get(message.command, message.data, callback_state)
          end) do
       {:ok, []} ->
         {0x0000, nil, %{}}
@@ -1093,9 +1136,10 @@ defmodule Dimse.Association do
 
   defp dispatch_move_request(handler, message, state) do
     move_destination = Map.get(message.command, {0x0000, 0x0600}, "")
+    callback_state = callback_state_for_message(state, message)
 
     case invoke_handler(:handle_move, 0x0021, state, fn ->
-           handler.handle_move(message.command, message.data, state)
+           handler.handle_move(message.command, message.data, callback_state)
          end) do
       {:ok, []} ->
         {0x0000, nil, %{}}
@@ -1388,10 +1432,12 @@ defmodule Dimse.Association do
 
   defp dispatch_n_request(handler, callback, arity, message, state) do
     if function_exported?(handler, callback, arity) do
+      callback_state = callback_state_for_message(state, message)
+
       result =
         case arity do
-          2 -> apply(handler, callback, [message.command, state])
-          3 -> apply(handler, callback, [message.command, message.data, state])
+          2 -> apply(handler, callback, [message.command, callback_state])
+          3 -> apply(handler, callback, [message.command, message.data, callback_state])
         end
 
       normalize_n_dispatch_result(callback, result, message.command)
@@ -1469,6 +1515,17 @@ defmodule Dimse.Association do
       end
     else
       {:ok, nil}
+    end
+  end
+
+  defp validate_association_request(rq, handler, state) do
+    if function_exported?(handler, :validate_association, 2) do
+      case handler.validate_association(rq, state) do
+        {:ok, nil} -> :ok
+        {:error, _} = error -> error
+      end
+    else
+      :ok
     end
   end
 

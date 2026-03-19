@@ -178,6 +178,25 @@ defmodule Dimse.Handler do
               {:ok, {String.t(), pos_integer()}} | {:error, term()}
 
   @doc """
+  Validates an incoming A-ASSOCIATE-RQ before presentation of application data.
+
+  This callback can inspect calling/called AE titles and other association
+  negotiation details to accept or reject the association.
+
+  ## Return Values
+
+    * `{:ok, nil}` — accept the association
+    * `{:error, reason}` — reject the association; sends A-ASSOCIATE-RJ with
+      result=1, source=1, reason=1
+
+  When not implemented, the SCP accepts all associations at this stage.
+  """
+  @callback validate_association(
+              request :: Dimse.Pdu.AssociateRq.t(),
+              state :: Dimse.Association.State.t()
+            ) :: {:ok, nil} | {:error, term()}
+
+  @doc """
   Authenticates the requesting SCU during A-ASSOCIATE-RQ processing.
 
   Called when the incoming A-ASSOCIATE-RQ contains a `UserIdentity` sub-item
@@ -203,6 +222,7 @@ defmodule Dimse.Handler do
   @optional_callbacks [
     supported_abstract_syntaxes: 0,
     resolve_ae: 1,
+    validate_association: 2,
     handle_authenticate: 2,
     handle_n_get: 2,
     handle_n_set: 3,

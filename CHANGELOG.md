@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-03-19
+
+### Added
+
+- `validate_association/2` optional handler callback for pre-auth association admission control
+- Current presentation-context details in handler state via `current_context_id`, `current_abstract_syntax_uid`, and `current_transfer_syntax_uid`
+- Integration coverage for association rejection and callback context propagation
+
+### Changed
+
+- SCP handler callbacks now receive association state enriched with the negotiated presentation context for the current message
+- Association rejection can now happen before user-identity authentication, enabling AE-title and policy checks at admission time
+
 ## [0.8.0] - 2026-03-18
 
 ### Added
@@ -221,7 +234,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Telemetry event definitions for association lifecycle and PDU I/O
 - CI workflow with Elixir 1.16/1.17/1.18 matrix
 
-[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.6.1...v0.7.0

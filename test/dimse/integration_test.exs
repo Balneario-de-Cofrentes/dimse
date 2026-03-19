@@ -1961,6 +1961,48 @@ defmodule Dimse.IntegrationTest do
     mod
   end
 
+  defp context_capture_handler(test_pid) do
+    mod = Module.concat(__MODULE__, :"FindContextHandler#{System.unique_integer([:positive])}")
+
+    Module.create(
+      mod,
+      quote do
+        @behaviour Dimse.Handler
+
+        @study_root_find "1.2.840.10008.5.1.4.1.2.2.1"
+
+        @impl true
+        def supported_abstract_syntaxes, do: [@study_root_find]
+
+        @impl true
+        def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+        @impl true
+        def handle_store(_command, _data, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_find(_command, _query, state) do
+          send(
+            unquote(test_pid),
+            {:find_context, state.current_context_id, state.current_abstract_syntax_uid,
+             state.current_transfer_syntax_uid}
+          )
+
+          {:ok, []}
+        end
+
+        @impl true
+        def handle_move(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_get(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+      end,
+      Macro.Env.location(__ENV__)
+    )
+
+    mod
+  end
+
   # ── Extended Negotiation (PS3.7 Annex D) ────────────────────────────────────
 
   describe "Extended Negotiation" do
@@ -2068,6 +2110,21 @@ defmodule Dimse.IntegrationTest do
       Dimse.stop_listener(ref)
     end
 
+    test "validate_association/2 can reject an association without user identity" do
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: AssociationValidationRejectHandler)
+      port = :ranch.get_port(ref)
+
+      result =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "REJECT_ME",
+          called_ae: "DIMSE",
+          abstract_syntaxes: ["1.2.840.10008.1.1"]
+        )
+
+      assert {:error, {:rejected, 1, 1, 1}} = result
+      Dimse.stop_listener(ref)
+    end
+
     test "SOP Class Extended Negotiation sub-items are decoded without error" do
       {:ok, ref} = Dimse.start_listener(port: 0, handler: ExtNegEchoHandler)
       port = :ranch.get_port(ref)
@@ -2153,6 +2210,32 @@ defmodule Dimse.IntegrationTest do
     test "get with unknown query level returns error without network call" do
       assert {:error, {:unknown_query_level, :no_such_level}} =
                Dimse.get(:dummy_pid, :no_such_level, <<>>)
+    end
+
+    test "handler callbacks receive current presentation context details in state" do
+      test_pid = self()
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: context_capture_handler(test_pid))
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "CTX_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@study_root_find],
+          transfer_syntaxes: [Dicom.UID.explicit_vr_little_endian()]
+        )
+
+      wait_for_established(assoc)
+
+      assert {:ok, []} = Dimse.find(assoc, @study_root_find, <<>>, timeout: 5_000)
+
+      assert_receive {:find_context, context_id, @study_root_find, transfer_syntax_uid}, 2_000
+      assert is_integer(context_id)
+      assert context_id > 0
+      assert transfer_syntax_uid == Dicom.UID.explicit_vr_little_endian()
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
     end
   end
 
@@ -2358,4 +2441,33 @@ defmodule QuerySupportHandler do
 
   @impl true
   def handle_get(_command, _query, _state), do: {:ok, []}
+end
+
+defmodule AssociationValidationRejectHandler do
+  @behaviour Dimse.Handler
+
+  @impl true
+  def supported_abstract_syntaxes, do: ["1.2.840.10008.1.1"]
+
+  @impl true
+  def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+  @impl true
+  def handle_store(_command, _data, _state), do: {:ok, 0x0000}
+
+  @impl true
+  def handle_find(_command, _query, _state), do: {:ok, []}
+
+  @impl true
+  def handle_move(_command, _query, _state), do: {:ok, []}
+
+  @impl true
+  def handle_get(_command, _query, _state), do: {:ok, []}
+
+  @impl true
+  def validate_association(%Dimse.Pdu.AssociateRq{calling_ae_title: "REJECT_ME"}, _state),
+    do: {:error, :forbidden_calling_ae}
+
+  @impl true
+  def validate_association(_request, _state), do: {:ok, nil}
 end
