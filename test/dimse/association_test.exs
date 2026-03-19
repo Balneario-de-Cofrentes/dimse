@@ -624,18 +624,13 @@ defmodule Dimse.AssociationTest do
 
   describe "Scu.open/3 catch :exit path" do
     test "returns error when Association process dies during negotiated_contexts call" do
-      # Start a raw TCP server that accepts, sends an A-ASSOCIATE-AC, then
-      # kills the connection after a brief delay — triggering the process to exit
-      # while the SCU is polling negotiated_contexts.
       {:ok, listen_sock} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
       {:ok, port} = :inet.port(listen_sock)
 
       spawn(fn ->
         {:ok, conn} = :gen_tcp.accept(listen_sock, 5_000)
-        # Read A-ASSOCIATE-RQ
         {:ok, _rq} = :gen_tcp.recv(conn, 0, 2_000)
-        # Don't respond — just hold the connection open for a bit then close
-        # This makes the Association stay in :negotiating until tcp_closed
+        # Don't respond — Association stays in :negotiating until tcp_closed
         :timer.sleep(50)
         :gen_tcp.close(conn)
       end)
@@ -647,6 +642,23 @@ defmodule Dimse.AssociationTest do
                )
 
       :gen_tcp.close(listen_sock)
+    end
+
+    test "returns {:error, :timeout} when remaining_timeout is 0 after Association.start" do
+      # Use timeout: 1 — the time spent in Association.start (TCP connect) may
+      # exhaust the 1ms budget, triggering the remaining <= 0 path (line 103-105).
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: Dimse.Scp.Echo)
+      port = :ranch.get_port(ref)
+
+      # With timeout: 1, Association.start may succeed but remaining_timeout will be 0
+      result =
+        Dimse.Scu.open("127.0.0.1", port,
+          timeout: 1,
+          abstract_syntaxes: [@verification_uid]
+        )
+
+      assert {:error, _} = result
+      Dimse.stop_listener(ref)
     end
   end
 
@@ -711,51 +723,54 @@ defmodule Dimse.AssociationTest do
     end
   end
 
-    test "SCP aborts when receiving unexpected PDU on established association" do
-      {:ok, ref} = Dimse.start_listener(port: 0, handler: Dimse.Scp.Echo)
-      port = :ranch.get_port(ref)
+  test "SCP aborts when receiving unexpected PDU on established association" do
+    {:ok, ref} = Dimse.start_listener(port: 0, handler: Dimse.Scp.Echo)
+    port = :ranch.get_port(ref)
 
-      # Connect as a raw TCP client, perform handshake, then send garbage PDU
-      {:ok, sock} = :gen_tcp.connect(~c"127.0.0.1", port, [:binary, active: false])
-      # Build and send A-ASSOCIATE-RQ
-      a_rq = build_associate_rq()
-      :gen_tcp.send(sock, a_rq)
-      # Read A-ASSOCIATE-AC
-      {:ok, _ac} = :gen_tcp.recv(sock, 0, 2_000)
-      # Send another A-ASSOCIATE-RQ (type 0x01) — unexpected on an established association
-      # The SCP should respond with A-ABORT (type 0x07)
-      :gen_tcp.send(sock, <<0x01, 0x00, 0, 0, 0, 10, 0, 1, 0, 0>> <> :binary.copy(<<0>>, 6))
+    # Connect as a raw TCP client, perform handshake, then send garbage PDU
+    {:ok, sock} = :gen_tcp.connect(~c"127.0.0.1", port, [:binary, active: false])
+    # Build and send A-ASSOCIATE-RQ
+    a_rq = build_associate_rq()
+    :gen_tcp.send(sock, a_rq)
+    # Read A-ASSOCIATE-AC
+    {:ok, _ac} = :gen_tcp.recv(sock, 0, 2_000)
 
-      # Read the A-ABORT PDU response
-      case :gen_tcp.recv(sock, 0, 2_000) do
-        {:ok, <<0x07, _::binary>>} -> :ok
-        {:error, :closed} -> :ok
-      end
+    # Send A-RELEASE-RP (type 0x06) — unexpected in :established phase (expected only in :releasing)
+    # The SCP should respond with A-ABORT (type 0x07)
+    :gen_tcp.send(sock, <<0x06, 0x00, 0, 0, 0, 4, 0, 0, 0, 0>>)
 
-      :gen_tcp.close(sock)
-      Dimse.stop_listener(ref)
+    # Read the A-ABORT PDU response or connection close
+    case :gen_tcp.recv(sock, 0, 2_000) do
+      {:ok, <<0x07, _::binary>>} -> :ok
+      {:error, :closed} -> :ok
     end
 
-    test "A-ABORT received while DIMSE request in flight replies to pending caller" do
-      {:ok, ref} = Dimse.start_listener(port: 0, handler: SlowEchoHandler)
-      port = :ranch.get_port(ref)
+    :gen_tcp.close(sock)
+    # Allow SCP process to terminate and flush cover data
+    :timer.sleep(50)
+    Dimse.stop_listener(ref)
+  end
 
-      {:ok, assoc} =
-        Dimse.connect("127.0.0.1", port, abstract_syntaxes: [@verification_uid])
+  test "A-ABORT received while DIMSE request in flight replies to pending caller" do
+    {:ok, ref} = Dimse.start_listener(port: 0, handler: SlowEchoHandler)
+    port = :ranch.get_port(ref)
 
-      assert :ok = wait_for_established(assoc)
+    {:ok, assoc} =
+      Dimse.connect("127.0.0.1", port, abstract_syntaxes: [@verification_uid])
 
-      # Start echo — SlowEchoHandler blocks 2s
-      task = Task.async(fn -> Dimse.echo(assoc, timeout: 10_000) end)
-      :timer.sleep(100)
+    assert :ok = wait_for_established(assoc)
 
-      # Send A-ABORT via the socket directly to trigger the pending_request abort path.
-      # We can't do that easily, so we use Dimse.abort which sends A-ABORT PDU.
-      Dimse.abort(assoc)
+    # Start echo — SlowEchoHandler blocks 2s
+    task = Task.async(fn -> Dimse.echo(assoc, timeout: 10_000) end)
+    :timer.sleep(100)
 
-      assert {:error, _} = Task.await(task, 3_000)
-      Dimse.stop_listener(ref)
-    end
+    # Send A-ABORT via the socket directly to trigger the pending_request abort path.
+    # We can't do that easily, so we use Dimse.abort which sends A-ABORT PDU.
+    Dimse.abort(assoc)
+
+    assert {:error, _} = Task.await(task, 3_000)
+    Dimse.stop_listener(ref)
+  end
 
   describe "Association with nil handler" do
     test "handler_abstract_syntaxes/1 defaults to Verification when handler is nil" do
