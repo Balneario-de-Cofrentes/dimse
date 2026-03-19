@@ -510,6 +510,35 @@ defmodule Dimse.IntegrationTest do
       Dimse.stop_listener(ref)
     end
 
+    test "C-GET sub-op counts failure when SOP class has no negotiated context" do
+      test_pid = self()
+      # Return an instance with MR Image Storage — NOT negotiated by the SCU
+      mr_storage = "1.2.840.10008.5.1.4.1.1.4"
+      instances = [{mr_storage, "1.2.3.99.1", :crypto.strong_rand_bytes(64)}]
+      handler = get_handler(test_pid, instances)
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      # SCU only negotiates CT Image Storage — MR won't have a context
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "GET_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@study_root_get, @ct_image_storage]
+        )
+
+      wait_for_established(assoc)
+
+      # The sub-op should fail (no context for MR), resulting in a failure/warning status
+      result = Dimse.get(assoc, :study, <<>>, timeout: 5_000)
+      # Status 0xB000 (warning: sub-operations complete, one or more failures)
+      assert {:error, {:status, _status}} = result
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+
     test "C-GET with echo on same association" do
       test_pid = self()
       instance1 = :crypto.strong_rand_bytes(64)
