@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Coverage: 95.90% → 96.36% with targeted protocol edge-case tests
-- Tests: 439 (10 properties + 429 tests)
+- Tests: 438 (10 properties + 428 tests)
 - Added tests for unexpected PDU handling, A-ABORT during pending request, C-GET sub-op failure, raw TCP protocol edge cases
 
 ## [0.8.1] - 2026-03-19

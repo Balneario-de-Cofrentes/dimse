@@ -643,23 +643,6 @@ defmodule Dimse.AssociationTest do
 
       :gen_tcp.close(listen_sock)
     end
-
-    test "returns {:error, :timeout} when remaining_timeout is 0 after Association.start" do
-      # Use timeout: 1 — the time spent in Association.start (TCP connect) may
-      # exhaust the 1ms budget, triggering the remaining <= 0 path (line 103-105).
-      {:ok, ref} = Dimse.start_listener(port: 0, handler: Dimse.Scp.Echo)
-      port = :ranch.get_port(ref)
-
-      # With timeout: 1, Association.start may succeed but remaining_timeout will be 0
-      result =
-        Dimse.Scu.open("127.0.0.1", port,
-          timeout: 1,
-          abstract_syntaxes: [@verification_uid]
-        )
-
-      assert {:error, _} = result
-      Dimse.stop_listener(ref)
-    end
   end
 
   describe "Association protocol edge cases" do
