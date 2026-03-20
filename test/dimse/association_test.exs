@@ -622,6 +622,51 @@ defmodule Dimse.AssociationTest do
     end
   end
 
+  describe "Scu helper normalization" do
+    test "finalize_open/3 aborts immediately when no time remains" do
+      pid =
+        spawn(fn ->
+          receive do
+            _ -> :ok
+          end
+        end)
+
+      started_at = System.monotonic_time(:millisecond) - 10
+
+      assert {:error, :timeout} = Dimse.Scu.finalize_open(pid, started_at, 0)
+    end
+
+    test "normalize_connect_call_exit/1 and normalize_connect_exit/1 cover supported exit forms" do
+      assert :closed = Dimse.Scu.normalize_connect_call_exit({:noproc, {GenServer, :call, []}})
+      assert :closed = Dimse.Scu.normalize_connect_call_exit({:normal, {GenServer, :call, []}})
+
+      assert {:rejected, 1, 2, 3} =
+               Dimse.Scu.normalize_connect_call_exit({:shutdown, {:rejected, 1, 2, 3}})
+
+      assert {:aborted, 2, 0} = Dimse.Scu.normalize_connect_exit({:aborted, 2, 0})
+      assert :closed = Dimse.Scu.normalize_connect_exit({:shutdown, :normal})
+      assert :tcp_closed = Dimse.Scu.normalize_connect_exit(:tcp_closed)
+    end
+
+    test "await_established_exit/3 prefers DOWN reasons and otherwise falls back" do
+      down_pid = spawn(fn -> :ok end)
+      down_ref = Process.monitor(down_pid)
+
+      assert {:error, :closed} =
+               Dimse.Scu.await_established_exit(down_pid, down_ref, {:noproc, {GenServer, :call, []}})
+
+      alive_pid = spawn(fn -> Process.sleep(100) end)
+      alive_ref = Process.monitor(alive_pid)
+
+      assert {:error, {:aborted, 2, 0}} =
+               Dimse.Scu.await_established_exit(
+                 alive_pid,
+                 alive_ref,
+                 {:shutdown, {:aborted, 2, 0}}
+               )
+    end
+  end
+
   describe "Scu.open/3 catch :exit path" do
     test "returns error when Association process dies during negotiated_contexts call" do
       {:ok, listen_sock} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])

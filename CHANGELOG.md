@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.3] - 2026-03-20
+
+### Changed
+
+- Coverage increased to 96.99% overall, with `Dimse.Scu` raised through deterministic helper-path tests instead of race-dependent assertions
+- Extracted `Dimse.Scu` connection-finalization and exit-normalization helpers as documented internal APIs (`@doc false`) to keep timeout and shutdown semantics directly testable
+- Added regression tests for immediate-open timeout handling, connect-exit normalization, and DOWN-vs-fallback error mapping
+- Implementation version bumped to `DIMSE_0.8.3`
+
 ## [0.8.2] - 2026-03-19
 
 ### Changed

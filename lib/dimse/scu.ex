@@ -93,17 +93,7 @@ defmodule Dimse.Scu do
     # Use start (not start_link) so connection failures don't crash the caller
     case Dimse.Association.start(assoc_opts) do
       {:ok, pid} ->
-        case remaining_timeout(started_at, timeout) do
-          remaining when remaining > 0 ->
-            case await_established(pid, remaining) do
-              :ok -> {:ok, pid}
-              {:error, _} = err -> err
-            end
-
-          _ ->
-            Dimse.Association.abort(pid)
-            {:error, :timeout}
-        end
+        finalize_open(pid, started_at, timeout)
 
       {:error, _} = err ->
         err
@@ -149,6 +139,47 @@ defmodule Dimse.Scu do
     end
   end
 
+  @doc false
+  @spec finalize_open(pid(), integer(), timeout()) :: {:ok, pid()} | {:error, term()}
+  def finalize_open(pid, started_at, timeout) do
+    case remaining_timeout(started_at, timeout) do
+      remaining when remaining > 0 ->
+        case await_established(pid, remaining) do
+          :ok -> {:ok, pid}
+          {:error, _} = err -> err
+        end
+
+      _ ->
+        Dimse.Association.abort(pid)
+        {:error, :timeout}
+    end
+  end
+
+  @doc false
+  @spec await_established_exit(pid(), reference(), term()) :: {:error, term()}
+  def await_established_exit(pid, ref, reason) do
+    wait_for_down(pid, ref, normalize_connect_call_exit(reason))
+  end
+
+  @doc false
+  @spec normalize_connect_call_exit(term()) :: term()
+  def normalize_connect_call_exit({:noproc, _}), do: :closed
+  def normalize_connect_call_exit({:normal, _}), do: :closed
+  def normalize_connect_call_exit({:shutdown, reason}), do: normalize_connect_exit(reason)
+  def normalize_connect_call_exit(reason), do: normalize_connect_exit(reason)
+
+  @doc false
+  @spec normalize_connect_exit(term()) :: term()
+  def normalize_connect_exit({:rejected, result, source, reason}),
+    do: {:rejected, result, source, reason}
+
+  def normalize_connect_exit({:aborted, source, reason}),
+    do: {:aborted, source, reason}
+
+  def normalize_connect_exit({:shutdown, reason}), do: normalize_connect_exit(reason)
+  def normalize_connect_exit(:normal), do: :closed
+  def normalize_connect_exit(reason), do: reason
+
   defp await_established(pid, timeout) do
     ref = Process.monitor(pid)
     deadline = System.monotonic_time(:millisecond) + timeout
@@ -182,8 +213,7 @@ defmodule Dimse.Scu do
         end
     end
   catch
-    :exit, reason ->
-      wait_for_down(pid, ref, normalize_connect_call_exit(reason))
+    :exit, reason -> await_established_exit(pid, ref, reason)
   end
 
   defp wait_for_down(pid, ref, fallback) do
@@ -195,19 +225,4 @@ defmodule Dimse.Scu do
         {:error, fallback}
     end
   end
-
-  defp normalize_connect_call_exit({:noproc, _}), do: :closed
-  defp normalize_connect_call_exit({:normal, _}), do: :closed
-  defp normalize_connect_call_exit({:shutdown, reason}), do: normalize_connect_exit(reason)
-  defp normalize_connect_call_exit(reason), do: normalize_connect_exit(reason)
-
-  defp normalize_connect_exit({:rejected, result, source, reason}),
-    do: {:rejected, result, source, reason}
-
-  defp normalize_connect_exit({:aborted, source, reason}),
-    do: {:aborted, source, reason}
-
-  defp normalize_connect_exit({:shutdown, reason}), do: normalize_connect_exit(reason)
-  defp normalize_connect_exit(:normal), do: :closed
-  defp normalize_connect_exit(reason), do: reason
 end

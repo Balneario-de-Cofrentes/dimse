@@ -22,7 +22,7 @@ defmodule Dimse.Association do
   alias Dimse.Command.Fields
 
   @implementation_uid "1.2.826.0.1.3680043.8.498.1"
-  @implementation_version "DIMSE_0.8.2"
+  @implementation_version "DIMSE_0.8.3"
 
   @default_transfer_syntaxes MapSet.new([
                                "1.2.840.10008.1.2",
