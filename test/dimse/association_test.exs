@@ -719,7 +719,9 @@ defmodule Dimse.AssociationTest do
 
     test "handler syntax and callback-state helpers cover nil and missing-context branches" do
       assert Association.test_handler_abstract_syntaxes(nil) == MapSet.new([@verification_uid])
-      assert Association.test_handler_abstract_syntaxes(NoSyntaxHandler) == MapSet.new([@verification_uid])
+
+      assert Association.test_handler_abstract_syntaxes(NoSyntaxHandler) ==
+               MapSet.new([@verification_uid])
 
       state = %State{negotiated_contexts: %{}, current_context_id: nil}
       message = %Dimse.Message{context_id: 3, command: %{}}
@@ -734,7 +736,11 @@ defmodule Dimse.AssociationTest do
       assert Association.test_get_in_user_info(%{}, :user_identity) == nil
 
       assert {0xC000, nil, %{}} =
-               Association.test_normalize_n_dispatch_result(:handle_n_set, {:error, 0xC000, "bad"}, %{})
+               Association.test_normalize_n_dispatch_result(
+                 :handle_n_set,
+                 {:error, 0xC000, "bad"},
+                 %{}
+               )
 
       cmd = %{}
       request = %{{0x0000, 0x1000} => "1.2.3"}
@@ -748,11 +754,13 @@ defmodule Dimse.AssociationTest do
 
     test "auth and validation helpers cover nil and ok-nil branches" do
       state = %State{}
+
       identity = %Dimse.Pdu.UserIdentity{
         identity_type: 0x01,
         primary_field: "user",
         positive_response_requested: false
       }
+
       user_info = %Dimse.Pdu.UserInformation{user_identity: nil}
 
       assert {:ok, nil} = Association.test_authenticate_user(nil, AuthOkNilHandler, state)
@@ -765,7 +773,8 @@ defmodule Dimse.AssociationTest do
                  state
                )
 
-      assert :ok = Association.test_validate_association_request(%{}, ValidationOkNilHandler, state)
+      assert :ok =
+               Association.test_validate_association_request(%{}, ValidationOkNilHandler, state)
     end
 
     test "role-selection and wait helpers cover nil, empty, and timeout branches" do
@@ -780,16 +789,26 @@ defmodule Dimse.AssociationTest do
              ) == nil
 
       roles = [
-        %Dimse.Pdu.RoleSelection{sop_class_uid: @verification_uid, scu_role: true, scp_role: false}
+        %Dimse.Pdu.RoleSelection{
+          sop_class_uid: @verification_uid,
+          scu_role: true,
+          scp_role: false
+        }
       ]
 
       accepted = %{1 => {@verification_uid, "1.2.840.10008.1.2"}}
 
-      assert roles == Association.test_echo_role_selections(%Dimse.Pdu.UserInformation{role_selections: roles}, accepted)
+      assert roles ==
+               Association.test_echo_role_selections(
+                 %Dimse.Pdu.UserInformation{role_selections: roles},
+                 accepted
+               )
+
       assert %{} = Association.test_roles_to_map(nil)
       assert %{@verification_uid => {true, false}} = Association.test_roles_to_map(roles)
 
       sleepy = spawn(fn -> Process.sleep(100) end)
+
       assert :timeout =
                Association.test_do_wait_sub_assoc(sleepy, System.monotonic_time(:millisecond) - 1)
     end

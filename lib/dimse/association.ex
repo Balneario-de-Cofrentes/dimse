@@ -136,7 +136,8 @@ defmodule Dimse.Association do
     do: request_on_negotiated_context?(message, state)
 
   @doc false
-  def test_callback_state_for_message(state, message), do: callback_state_for_message(state, message)
+  def test_callback_state_for_message(state, message),
+    do: callback_state_for_message(state, message)
 
   @doc false
   def test_get_in_user_info(rq, field), do: get_in_user_info(rq, field)
