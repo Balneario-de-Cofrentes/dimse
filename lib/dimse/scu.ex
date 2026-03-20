@@ -216,6 +216,10 @@ defmodule Dimse.Scu do
     :exit, reason -> await_established_exit(pid, ref, reason)
   end
 
+  @doc false
+  @spec test_do_await_established(pid(), reference(), integer()) :: :ok | {:error, term()}
+  def test_do_await_established(pid, ref, deadline), do: do_await_established(pid, ref, deadline)
+
   defp wait_for_down(pid, ref, fallback) do
     receive do
       {:DOWN, ^ref, :process, ^pid, reason} ->

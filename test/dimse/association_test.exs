@@ -45,6 +45,17 @@ defmodule Dimse.AssociationTest do
     end
   end
 
+  defmodule NoSyntaxHandler do
+  end
+
+  defmodule AuthOkNilHandler do
+    def handle_authenticate(_identity, _state), do: {:ok, nil}
+  end
+
+  defmodule ValidationOkNilHandler do
+    def validate_association(_rq, _state), do: {:ok, nil}
+  end
+
   describe "start_link/1" do
     test "starts a GenServer process in idle phase" do
       assert {:ok, pid} = Association.start_link([])
@@ -639,6 +650,7 @@ defmodule Dimse.AssociationTest do
     test "normalize_connect_call_exit/1 and normalize_connect_exit/1 cover supported exit forms" do
       assert :closed = Dimse.Scu.normalize_connect_call_exit({:noproc, {GenServer, :call, []}})
       assert :closed = Dimse.Scu.normalize_connect_call_exit({:normal, {GenServer, :call, []}})
+      assert :tcp_closed = Dimse.Scu.normalize_connect_call_exit(:tcp_closed)
 
       assert {:rejected, 1, 2, 3} =
                Dimse.Scu.normalize_connect_call_exit({:shutdown, {:rejected, 1, 2, 3}})
@@ -653,7 +665,11 @@ defmodule Dimse.AssociationTest do
       down_ref = Process.monitor(down_pid)
 
       assert {:error, :closed} =
-               Dimse.Scu.await_established_exit(down_pid, down_ref, {:noproc, {GenServer, :call, []}})
+               Dimse.Scu.await_established_exit(
+                 down_pid,
+                 down_ref,
+                 {:noproc, {GenServer, :call, []}}
+               )
 
       alive_pid = spawn(fn -> Process.sleep(100) end)
       alive_ref = Process.monitor(alive_pid)
@@ -664,6 +680,118 @@ defmodule Dimse.AssociationTest do
                  alive_ref,
                  {:shutdown, {:aborted, 2, 0}}
                )
+    end
+
+    test "await_established_exit/3 returns the monitored DOWN reason when it arrives" do
+      pid = spawn(fn -> Process.sleep(5_000) end)
+      ref = Process.monitor(pid)
+      Process.exit(pid, :kill)
+      Process.sleep(20)
+
+      assert {:error, :killed} =
+               Dimse.Scu.await_established_exit(
+                 pid,
+                 ref,
+                 {:shutdown, {:aborted, 2, 0}}
+               )
+    end
+
+    test "test_do_await_established/3 catches negotiated context lookup exits" do
+      dead_pid = spawn(fn -> :ok end)
+      ref = make_ref()
+
+      # Ensure the process is gone before the SCU polls it.
+      Process.sleep(20)
+
+      assert {:error, :closed} =
+               Dimse.Scu.test_do_await_established(
+                 dead_pid,
+                 ref,
+                 System.monotonic_time(:millisecond) + 100
+               )
+    end
+  end
+
+  describe "Association internal helpers" do
+    test "close_socket/1 nil fast path is harmless" do
+      assert :ok = Association.test_close_socket(%State{socket: nil})
+    end
+
+    test "handler syntax and callback-state helpers cover nil and missing-context branches" do
+      assert Association.test_handler_abstract_syntaxes(nil) == MapSet.new([@verification_uid])
+      assert Association.test_handler_abstract_syntaxes(NoSyntaxHandler) == MapSet.new([@verification_uid])
+
+      state = %State{negotiated_contexts: %{}, current_context_id: nil}
+      message = %Dimse.Message{context_id: 3, command: %{}}
+
+      assert %State{current_context_id: 3, current_abstract_syntax_uid: nil} =
+               Association.test_callback_state_for_message(state, message)
+
+      refute Association.test_request_on_negotiated_context?(message, state)
+    end
+
+    test "user info and N-response helpers cover nil and error forms" do
+      assert Association.test_get_in_user_info(%{}, :user_identity) == nil
+
+      assert {0xC000, nil, %{}} =
+               Association.test_normalize_n_dispatch_result(:handle_n_set, {:error, 0xC000, "bad"}, %{})
+
+      cmd = %{}
+      request = %{{0x0000, 0x1000} => "1.2.3"}
+
+      assert %{{0x0000, 0x1000} => "1.2.3"} =
+               Association.test_maybe_put_instance_uid(cmd, 0x0001, request)
+
+      assert %{} = Association.test_maybe_put_instance_uid(cmd, 0x0001, %{})
+      assert %{} = Association.test_maybe_put_instance_uid(cmd, 0x8020, request)
+    end
+
+    test "auth and validation helpers cover nil and ok-nil branches" do
+      state = %State{}
+      identity = %Dimse.Pdu.UserIdentity{
+        identity_type: 0x01,
+        primary_field: "user",
+        positive_response_requested: false
+      }
+      user_info = %Dimse.Pdu.UserInformation{user_identity: nil}
+
+      assert {:ok, nil} = Association.test_authenticate_user(nil, AuthOkNilHandler, state)
+      assert {:ok, nil} = Association.test_authenticate_user(user_info, AuthOkNilHandler, state)
+
+      assert {:ok, nil} =
+               Association.test_authenticate_user(
+                 %Dimse.Pdu.UserInformation{user_identity: identity},
+                 AuthOkNilHandler,
+                 state
+               )
+
+      assert :ok = Association.test_validate_association_request(%{}, ValidationOkNilHandler, state)
+    end
+
+    test "role-selection and wait helpers cover nil, empty, and timeout branches" do
+      assert Association.test_echo_role_selections(
+               %Dimse.Pdu.UserInformation{role_selections: nil},
+               %{}
+             ) == nil
+
+      assert Association.test_echo_role_selections(
+               %Dimse.Pdu.UserInformation{role_selections: []},
+               %{}
+             ) == nil
+
+      roles = [
+        %Dimse.Pdu.RoleSelection{sop_class_uid: @verification_uid, scu_role: true, scp_role: false}
+      ]
+
+      accepted = %{1 => {@verification_uid, "1.2.840.10008.1.2"}}
+
+      assert roles == Association.test_echo_role_selections(%Dimse.Pdu.UserInformation{role_selections: roles}, accepted)
+      assert %{} = Association.test_roles_to_map(nil)
+      assert %{@verification_uid => {true, false}} = Association.test_roles_to_map(roles)
+
+      sleepy = spawn(fn -> Process.sleep(100) end)
+      assert :timeout =
+               Association.test_do_wait_sub_assoc(sleepy, System.monotonic_time(:millisecond) - 1)
     end
   end
 

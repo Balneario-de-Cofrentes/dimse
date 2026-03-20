@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.4] - 2026-03-20
+
+### Changed
+
+- Coverage increased to 98.16% overall, with `Dimse.Scu` driven to 100% and `Dimse.Association` lifted to 95.64%
+- Added deterministic regression tests for SCU connect-exit normalization, DOWN-preferred error mapping, and internal association-helper edge cases
+- Exposed a tiny set of `@doc false` SCU/association helpers to make shutdown and timeout branches testable without protocol flakiness
+- Implementation version bumped to `DIMSE_0.8.4`
+
 ## [0.8.3] - 2026-03-20
 
 ### Changed
@@ -251,7 +260,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Telemetry event definitions for association lifecycle and PDU I/O
 - CI workflow with Elixir 1.16/1.17/1.18 matrix
 
-[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.3...HEAD
+[0.8.3]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.7.1...v0.8.0

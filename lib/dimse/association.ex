@@ -22,7 +22,7 @@ defmodule Dimse.Association do
   alias Dimse.Command.Fields
 
   @implementation_uid "1.2.826.0.1.3680043.8.498.1"
-  @implementation_version "DIMSE_0.8.3"
+  @implementation_version "DIMSE_0.8.4"
 
   @default_transfer_syntaxes MapSet.new([
                                "1.2.840.10008.1.2",
@@ -124,6 +124,48 @@ defmodule Dimse.Association do
   def negotiated_roles(pid) do
     GenServer.call(pid, :get_negotiated_roles)
   end
+
+  @doc false
+  def test_close_socket(state), do: close_socket(state)
+
+  @doc false
+  def test_handler_abstract_syntaxes(handler), do: handler_abstract_syntaxes(handler)
+
+  @doc false
+  def test_request_on_negotiated_context?(message, state),
+    do: request_on_negotiated_context?(message, state)
+
+  @doc false
+  def test_callback_state_for_message(state, message), do: callback_state_for_message(state, message)
+
+  @doc false
+  def test_get_in_user_info(rq, field), do: get_in_user_info(rq, field)
+
+  @doc false
+  def test_normalize_n_dispatch_result(callback, result, command),
+    do: normalize_n_dispatch_result(callback, result, command)
+
+  @doc false
+  def test_authenticate_user(user_info, handler, state),
+    do: authenticate_user(user_info, handler, state)
+
+  @doc false
+  def test_validate_association_request(rq, handler, state),
+    do: validate_association_request(rq, handler, state)
+
+  @doc false
+  def test_echo_role_selections(user_info, accepted),
+    do: echo_role_selections(user_info, accepted)
+
+  @doc false
+  def test_roles_to_map(roles), do: roles_to_map(roles)
+
+  @doc false
+  def test_maybe_put_instance_uid(cmd, command_field, request_command),
+    do: maybe_put_instance_uid(cmd, command_field, request_command)
+
+  @doc false
+  def test_do_wait_sub_assoc(assoc, deadline), do: do_wait_sub_assoc(assoc, deadline)
 
   # --- GenServer callbacks ---
 
