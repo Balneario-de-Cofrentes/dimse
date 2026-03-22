@@ -292,9 +292,19 @@ docker compose -f docker-compose.interop.yml down
 | Extended negotiation | Yes | Yes | Yes | Yes | Yes | No | No |
 | License | MIT | BSD-3 | MPL-1.1 | MIT | MS-PL | AGPL-3.0 | MIT/Apache |
 
-`dimse` pairs with [`dicom`](https://hex.pm/packages/dicom) for a complete pure-Elixir DICOM toolkit:
-`dicom` handles P10 files and data sets (PS3.5, PS3.6, PS3.10, PS3.18);
-`dimse` handles DIMSE networking (PS3.7, PS3.8).
+## Part of the Balneario Healthcare Toolkit
+
+Three pure-Elixir libraries covering the core protocol surface of healthcare IT. Zero NIFs. Built for production.
+
+| Library | Domain | Standards | |
+|---------|--------|-----------|---|
+| **dicom** | Medical imaging data | PS3.5 / 6 / 10 / 15 / 16 / 18 | [Hex](https://hex.pm/packages/dicom) · [Docs](https://hexdocs.pm/dicom) · [GitHub](https://github.com/Balneario-de-Cofrentes/dicom) |
+| **dimse** | DICOM networking | PS3.7 / 8 / 15 | [Hex](https://hex.pm/packages/dimse) · [Docs](https://hexdocs.pm/dimse) · [GitHub](https://github.com/Balneario-de-Cofrentes/dimse) |
+| **hl7v2** | Clinical messaging | HL7 v2.5.1 | [Hex](https://hex.pm/packages/hl7v2) · [Docs](https://hexdocs.pm/hl7v2) · [GitHub](https://github.com/Balneario-de-Cofrentes/hl7v2) |
+
+[`dicom`](https://github.com/Balneario-de-Cofrentes/dicom) parses and writes DICOM files. `dimse` moves them over the network via DIMSE-C/N services. [`hl7v2`](https://github.com/Balneario-de-Cofrentes/hl7v2) handles the clinical messages (ADT, ORM, ORU) that trigger and contextualize imaging workflows.
+
+Together they give Elixir the same healthcare protocol coverage that Java has with dcm4che + HAPI, or C++ with DCMTK — on the BEAM.
 
 ## Contributing
 
