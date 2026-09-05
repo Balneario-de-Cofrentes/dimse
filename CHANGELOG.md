@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-09-05
+
 ### Added
 
 - Lazy C-MOVE and C-GET sub-operations. `handle_move/3` and `handle_get/3` may return `{sop_class_uid, sop_instance_uid, fetcher}` where `fetcher` is a zero-arity function returning `{:ok, data_set}` or `{:error, reason}`; the association calls it right before that object's C-STORE and keeps no reference to the bytes afterwards, so a retrieve of thousands of objects holds one data set at a time. A fetcher that returns an error, raises, throws, exits or returns an unexpected term counts as one failed sub-operation (the last four also emit `[:dimse, :handler, :exception]` with `callback: :fetcher`) and the retrieve continues.
@@ -272,7 +274,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Telemetry event definitions for association lifecycle and PDU I/O
 - CI workflow with Elixir 1.16/1.17/1.18 matrix
 
-[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.4...HEAD
+[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.5...HEAD
+[0.8.5]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.4...v0.8.5
 [0.8.4]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.1...v0.8.2
