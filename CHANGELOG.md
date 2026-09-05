@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.7] - 2026-09-05
+
+### Changed
+
+- Every association rejection now ends the process with a shutdown reason instead of a crash reason: `{:shutdown, :no_accepted_contexts}`, `{:shutdown, :authentication_failed}` and `{:shutdown, :association_rejected}` on the SCP side, `{:shutdown, {:rejected, result, source, reason}}` on the SCU side. Refusing an association is the decision the SCP was asked to make, so an SCP with an AE allowlist or an association policy no longer logs two error reports with a full state dump for every unauthorized attempt. `Dimse.connect/3` still returns `{:error, {:rejected, result, source, reason}}` and the other public results are unchanged.
+- Implementation version bumped to `DIMSE_0.8.7`.
+
 ## [0.8.6] - 2026-09-05
 
 ### Changed
@@ -281,7 +288,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Telemetry event definitions for association lifecycle and PDU I/O
 - CI workflow with Elixir 1.16/1.17/1.18 matrix
 
-[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.6...HEAD
+[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.7...HEAD
+[0.8.7]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.6...v0.8.7
 [0.8.6]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.5...v0.8.6
 [0.8.5]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.4...v0.8.5
 [0.8.4]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.3...v0.8.4

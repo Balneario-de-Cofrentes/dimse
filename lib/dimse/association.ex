@@ -22,7 +22,7 @@ defmodule Dimse.Association do
   alias Dimse.Command.Fields
 
   @implementation_uid "1.2.826.0.1.3680043.8.498.1"
-  @implementation_version "DIMSE_0.8.6"
+  @implementation_version "DIMSE_0.8.7"
 
   @implicit_vr_le "1.2.840.10008.1.2"
   @explicit_vr_le "1.2.840.10008.1.2.1"
@@ -537,11 +537,9 @@ defmodule Dimse.Association do
       result: :rejected
     })
 
-    if state.pending_request do
-      # SCU init is waiting -- we use the init caller stored elsewhere
-    end
-
-    {:stop, {:rejected, rj.result, rj.source, rj.reason}, state}
+    # The peer refused the association: an outcome of connecting, not a crash.
+    # `Dimse.connect/3` still answers {:error, {:rejected, result, source, reason}}.
+    {:stop, {:shutdown, {:rejected, rj.result, rj.source, rj.reason}}, state}
   end
 
   # Established: P-DATA-TF
@@ -621,7 +619,7 @@ defmodule Dimse.Association do
       })
 
       send_pdu(state, %Pdu.AssociateRj{result: 1, source: 1, reason: 1})
-      {:stop, :no_accepted_contexts, state}
+      {:stop, {:shutdown, :no_accepted_contexts}, state}
     else
       case validate_association_request(rq, handler, state) do
         :ok ->
@@ -693,7 +691,7 @@ defmodule Dimse.Association do
               })
 
               send_pdu(state, %Pdu.AssociateRj{result: 1, source: 1, reason: 1})
-              {:stop, :authentication_failed, state}
+              {:stop, {:shutdown, :authentication_failed}, state}
           end
 
         {:error, _reason} ->
@@ -708,7 +706,7 @@ defmodule Dimse.Association do
           })
 
           send_pdu(state, %Pdu.AssociateRj{result: 1, source: 1, reason: 1})
-          {:stop, :association_rejected, state}
+          {:stop, {:shutdown, :association_rejected}, state}
       end
     end
   end

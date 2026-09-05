@@ -444,6 +444,41 @@ defmodule Dimse.AssociationTest do
     end
   end
 
+  describe "association rejections shut down instead of crashing" do
+    test "an SCP that rejects the association exits with {:shutdown, :association_rejected}" do
+      defmodule RejectingHandler do
+        @behaviour Dimse.Handler
+        def validate_association(_request, _state), do: {:error, :calling_ae_not_allowed}
+        def handle_echo(_command, _state), do: {:ok, 0x0000}
+        def handle_store(_command, _data_set, _state), do: {:ok, 0x0000}
+        def handle_find(_command, _query, _state), do: {:ok, []}
+        def handle_move(_command, _query, _state), do: {:ok, []}
+        def handle_get(_command, _query, _state), do: {:ok, []}
+      end
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: RejectingHandler)
+      on_exit(fn -> Dimse.stop_listener(ref) end)
+
+      assert {:error, {:rejected, 1, 1, 1}} =
+               Dimse.connect("127.0.0.1", :ranch.get_port(ref),
+                 calling_ae: "UNLISTED",
+                 called_ae: "DIMSE",
+                 abstract_syntaxes: [@verification_uid]
+               )
+    end
+
+    test "a rejection reason keeps its public shape through the SCU exit normalizer" do
+      assert :association_rejected =
+               Dimse.Scu.normalize_connect_exit({:shutdown, :association_rejected})
+
+      assert :no_accepted_contexts =
+               Dimse.Scu.normalize_connect_exit({:shutdown, :no_accepted_contexts})
+
+      assert :authentication_failed =
+               Dimse.Scu.normalize_connect_exit({:shutdown, :authentication_failed})
+    end
+  end
+
   describe "Association handles tcp_closed during established" do
     test "association shuts down with {:shutdown, :tcp_closed} when the remote side closes" do
       {:ok, ref} = Dimse.start_listener(port: 0, handler: Dimse.Scp.Echo)
