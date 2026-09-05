@@ -445,7 +445,7 @@ defmodule Dimse.AssociationTest do
   end
 
   describe "Association handles tcp_closed during established" do
-    test "association exits with :tcp_closed when remote side closes unexpectedly" do
+    test "association shuts down with {:shutdown, :tcp_closed} when the remote side closes" do
       {:ok, ref} = Dimse.start_listener(port: 0, handler: Dimse.Scp.Echo)
       port = :ranch.get_port(ref)
 
@@ -463,7 +463,7 @@ defmodule Dimse.AssociationTest do
       # socket. The SCU association receives {:tcp_closed, socket} and exits.
       Dimse.stop_listener(ref)
 
-      assert_receive {:DOWN, ^pid_ref, :process, ^assoc, :tcp_closed}, 2_000
+      assert_receive {:DOWN, ^pid_ref, :process, ^assoc, {:shutdown, :tcp_closed}}, 2_000
     end
   end
 

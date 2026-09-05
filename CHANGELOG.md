@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-09-05
+
+### Changed
+
+- An association whose peer closes the TCP connection now exits with `{:shutdown, :tcp_closed}` instead of `:tcp_closed`. Callers blocked on the association still receive `{:error, :tcp_closed}` and `Dimse.connect/3` still returns `{:error, :tcp_closed}`, but GenServer and Ranch no longer log a crash for every TCP health probe that connects and closes without an A-ASSOCIATE-RQ (one error report per probe, every few seconds, on a monitored SCP).
+- Implementation version bumped to `DIMSE_0.8.6`.
+
 ## [0.8.5] - 2026-09-05
 
 ### Added
@@ -274,7 +281,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Telemetry event definitions for association lifecycle and PDU I/O
 - CI workflow with Elixir 1.16/1.17/1.18 matrix
 
-[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.5...HEAD
+[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.6...HEAD
+[0.8.6]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.5...v0.8.6
 [0.8.5]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.4...v0.8.5
 [0.8.4]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.2...v0.8.3

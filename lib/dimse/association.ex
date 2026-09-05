@@ -22,7 +22,7 @@ defmodule Dimse.Association do
   alias Dimse.Command.Fields
 
   @implementation_uid "1.2.826.0.1.3680043.8.498.1"
-  @implementation_version "DIMSE_0.8.5"
+  @implementation_version "DIMSE_0.8.6"
 
   @implicit_vr_le "1.2.840.10008.1.2"
   @explicit_vr_le "1.2.840.10008.1.2.1"
@@ -425,9 +425,13 @@ defmodule Dimse.Association do
     end
   end
 
+  # The peer closed the connection. Callers waiting on this association get
+  # {:error, :tcp_closed}; the process itself ends with a shutdown reason so
+  # neither GenServer nor Ranch reports a crash. A TCP health probe that
+  # connects and closes without an A-ASSOCIATE-RQ is the everyday case.
   def handle_info({closed, socket}, %{socket: socket} = state)
       when closed in [:tcp_closed, :ssl_closed] do
-    close_connection(state, :tcp_closed)
+    close_connection(state, :tcp_closed, {:shutdown, :tcp_closed})
   end
 
   def handle_info({error, socket, reason}, %{socket: socket} = state)
@@ -1474,7 +1478,7 @@ defmodule Dimse.Association do
   defp close_socket(%{transport: :ssl, socket: socket}), do: :ssl.close(socket)
   defp close_socket(%{transport: transport, socket: socket}), do: transport.close(socket)
 
-  defp close_connection(state, reason) do
+  defp close_connection(state, reason, exit_reason \\ nil) do
     if state.pending_request do
       GenServer.reply(state.pending_request, {:error, reason})
     end
@@ -1483,7 +1487,8 @@ defmodule Dimse.Association do
       GenServer.reply(state.pending_release, {:error, reason})
     end
 
-    {:stop, reason, %{state | phase: :closed, pending_request: nil, pending_release: nil}}
+    {:stop, exit_reason || reason,
+     %{state | phase: :closed, pending_request: nil, pending_release: nil}}
   end
 
   # --- ARTIM timer ---
