@@ -1009,4 +1009,70 @@ defmodule Dimse.AssociationTest do
 
     :ok
   end
+
+  describe "handler callbacks on a not-yet-loaded module" do
+    # Regression: `function_exported?/3` returns false for modules that are on
+    # the code path but not yet loaded, which silently skipped optional
+    # callbacks such as validate_association/2 in interactive (dev/test) mode.
+    setup do
+      handler = Dimse.TestSupport.UnloadedHandler
+      :code.purge(handler)
+      :code.delete(handler)
+      refute :erlang.module_loaded(handler)
+      {:ok, handler: handler}
+    end
+
+    test "validate_association/2 is still consulted", %{handler: handler} do
+      assert {:error, :calling_ae_not_allowed} =
+               Association.test_validate_association_request(%{}, handler, %{})
+    end
+
+    test "supported_abstract_syntaxes/0 is still consulted", %{handler: handler} do
+      :code.purge(handler)
+      :code.delete(handler)
+
+      assert MapSet.new(["1.2.840.10008.5.1.4.1.1.2"]) ==
+               Association.test_handler_abstract_syntaxes(handler)
+    end
+  end
+
+  describe "failed SOP Instance UID List" do
+    @implicit "1.2.840.10008.1.2"
+    @explicit "1.2.840.10008.1.2.1"
+
+    test "is absent when nothing failed" do
+      assert Association.test_failed_sop_instance_uid_list([], @explicit) == nil
+    end
+
+    test "lists the UIDs in sub-operation order, padded to an even length" do
+      # failed_uids is kept newest first
+      assert <<0x08, 0x00, 0x58, 0x00, "UI", length::16-little, value::binary>> =
+               Association.test_failed_sop_instance_uid_list(
+                 ["1.2.3.4.2", "1.2.3.4.1"],
+                 @explicit
+               )
+
+      assert value == "1.2.3.4.1\\1.2.3.4.2" <> <<0>>
+      assert length == byte_size(value)
+
+      assert <<0x08, 0x00, 0x58, 0x00, length::32-little, value::binary>> =
+               Association.test_failed_sop_instance_uid_list(["1.2.3"], @implicit)
+
+      assert value == "1.2.3" <> <<0>>
+      assert length == 6
+    end
+
+    test "keeps the leading UIDs that fit a 16-bit explicit VR length" do
+      uids = for i <- 1..4000, do: "1.2.826.0.1.3680043.8.498.#{100_000 + i}"
+
+      assert <<_tag::32, "UI", length::16-little, value::binary>> =
+               Association.test_failed_sop_instance_uid_list(Enum.reverse(uids), @explicit)
+
+      assert length == byte_size(value)
+      assert length <= 65_534
+      kept = value |> String.trim_trailing(<<0>>) |> String.split("\\")
+      assert kept == Enum.take(uids, length(kept))
+      assert length(kept) < 4000
+    end
+  end
 end

@@ -75,9 +75,11 @@ defmodule Dimse.Telemetry do
     - Measurements: `%{duration: integer()}`
     - Metadata: `%{association_id: String.t(), callback: atom(), status: integer()}`
 
-  - `[:dimse, :handler, :exception]` -- SCP handler callback raised
+  - `[:dimse, :handler, :exception]` -- SCP handler callback raised, or a C-MOVE / C-GET
+    fetcher (see `Dimse.Handler`) raised, threw, exited or returned an unexpected term
     - Measurements: `%{duration: integer()}`
-    - Metadata: `%{association_id: String.t(), callback: atom(), kind: atom(), reason: term()}`
+    - Metadata: `%{association_id: String.t(), callback: atom(), kind: atom(), reason: term()}`.
+      `callback` is `:fetcher` for fetcher failures, which have no matching start or stop event.
 
   ### Sub-Operations (C-GET / C-MOVE)
 

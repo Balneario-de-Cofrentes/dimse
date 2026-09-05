@@ -42,8 +42,14 @@ defmodule Dimse.Handler do
 
         @impl true
         def handle_move(_command, _query, _state) do
-          # Return list of SOP Instance UIDs to send
-          {:ok, []}
+          # One element per C-STORE sub-operation. The third element is the
+          # encoded data set, or a zero-arity function that loads it on demand
+          # right before that sub-operation is sent.
+          {:ok,
+           [
+             {"1.2.840.10008.5.1.4.1.1.2", "1.2.3.4",
+              fn -> MyApp.Archive.read_data_set("1.2.3.4") end}
+           ]}
         end
 
         @impl true
@@ -58,11 +64,72 @@ defmodule Dimse.Handler do
     `{:error, status_code, message}`.
   - `handle_find/3` returns `{:ok, [identifier_binary()]}` or
     `{:error, status_code, message}`.
-  - `handle_move/3` and `handle_get/3` return service-specific result lists or
-    `{:error, status_code, message}`.
+  - `handle_move/3` and `handle_get/3` return `{:ok, [t:instance/0]}` or
+    `{:error, status_code, message}`. See the next section.
 
   The status code is a DIMSE status (see `Dimse.Command.Status`).
+
+  ## C-MOVE and C-GET sub-operations
+
+  `handle_move/3` and `handle_get/3` return one `t:instance/0` per C-STORE
+  sub-operation: `{sop_class_uid, sop_instance_uid, data}`. `data` is either
+  the encoded data set as a binary (no Part 10 preamble or file meta group,
+  the same bytes `handle_store/3` receives) or a `t:fetcher/0`, a zero-arity
+  function that loads that data set on demand.
+
+  The list length is the number of sub-operations, so Number of Remaining
+  Sub-operations is exact from the first pending response and the
+  `[:dimse, :sub_operation, :start]` event reports `total_instances` as the
+  list length. Only the object bytes are lazy:
+
+    * A binary element is sent as is.
+    * A fetcher element is called on the association process right before its
+      C-STORE, once the previous sub-operation has finished (C-GET: its
+      C-STORE-RSP was received; C-MOVE: the C-STORE on the sub-association
+      returned). The association keeps no reference to the returned bytes once
+      the C-STORE has been sent, so they are reclaimable at the next garbage
+      collection. A retrieve of thousands of objects references one data set
+      at a time instead of the whole list.
+    * The fetcher blocks the association process while it runs, like any other
+      handler callback: PDUs for that association (A-ABORT, C-CANCEL) are not
+      processed until it returns.
+    * A fetcher returning `{:error, reason}` counts as one failed
+      sub-operation: Number of Failed Sub-operations increments, the SOP
+      Instance UID is added to the Failed SOP Instance UID List (0008,0058) of
+      the final response, and the retrieve continues with the next element.
+    * A fetcher that raises, throws, exits or returns any other term is also
+      counted as failed and the retrieve continues. That is a bug in the
+      handler, so the association first emits `[:dimse, :handler, :exception]`
+      with `callback: :fetcher` and the exception in `reason`.
+    * For C-GET the presentation context is resolved before the fetcher runs.
+      An element whose SOP Class has no accepted presentation context is
+      counted as failed without invoking its fetcher.
+    * Binaries and fetchers can be mixed freely in one list.
+
+  The final C-MOVE-RSP or C-GET-RSP has status `0xB000` when any
+  sub-operation failed and then carries an Identifier with the Failed SOP
+  Instance UID List (0008,0058) in sub-operation order (PS3.4 C.4.2.1.4.2 for
+  C-MOVE, C.4.3.1.3.2 for C-GET), encoded in the transfer syntax negotiated for
+  the request's presentation context. Under Explicit VR Little Endian the
+  element length is a 16-bit field, so the list is cut to the leading UIDs that
+  fit in 65,534 bytes; the counts in the command set stay exact.
   """
+
+  @typedoc """
+  Zero-arity function that loads one object's encoded data set on demand.
+
+  Called by the association right before that object's C-STORE sub-operation.
+  Returns `{:ok, data_set}` with the encoded data set (no Part 10 header) or
+  `{:error, reason}`.
+  """
+  @type fetcher :: (-> {:ok, binary()} | {:error, term()})
+
+  @typedoc """
+  One C-STORE sub-operation of a C-MOVE or C-GET: SOP Class UID, SOP Instance
+  UID and the object, either as the encoded data set or as a `t:fetcher/0`.
+  """
+  @type instance ::
+          {sop_class_uid :: String.t(), sop_instance_uid :: String.t(), binary() | fetcher()}
 
   @doc "Called when a C-ECHO-RQ is received."
   @callback handle_echo(command :: map(), state :: Dimse.Association.State.t()) ::
@@ -87,28 +154,32 @@ defmodule Dimse.Handler do
   @doc """
   Called when a C-MOVE-RQ is received.
 
-  Return a list of `{sop_class_uid, sop_instance_uid, data}` tuples to transfer
-  to the move destination via C-STORE sub-operations.
+  Return one `t:instance/0` per object to transfer to the move destination via
+  C-STORE sub-operations. Each element carries the encoded data set or a
+  `t:fetcher/0` that loads it right before its C-STORE. See "C-MOVE and C-GET
+  sub-operations" in the module documentation for the full contract.
   """
   @callback handle_move(
               command :: map(),
               query :: binary(),
               state :: Dimse.Association.State.t()
             ) ::
-              {:ok, [{String.t(), String.t(), binary()}]} | {:error, integer(), String.t()}
+              {:ok, [instance()]} | {:error, integer(), String.t()}
 
   @doc """
   Called when a C-GET-RQ is received.
 
-  Return a list of `{sop_class_uid, sop_instance_uid, data}` tuples to send
-  back on the same association via C-STORE sub-operations.
+  Return one `t:instance/0` per object to send back on the same association via
+  C-STORE sub-operations. Each element carries the encoded data set or a
+  `t:fetcher/0` that loads it right before its C-STORE. See "C-MOVE and C-GET
+  sub-operations" in the module documentation for the full contract.
   """
   @callback handle_get(
               command :: map(),
               query :: binary(),
               state :: Dimse.Association.State.t()
             ) ::
-              {:ok, [{String.t(), String.t(), binary()}]} | {:error, integer(), String.t()}
+              {:ok, [instance()]} | {:error, integer(), String.t()}
 
   # --- DIMSE-N callbacks (PS3.7 Chapter 10) ---
 

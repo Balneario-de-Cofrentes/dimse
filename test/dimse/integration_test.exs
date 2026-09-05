@@ -1297,6 +1297,243 @@ defmodule Dimse.IntegrationTest do
 
   # --- C-GET handler factories ---
 
+  describe "lazy sub-operations" do
+    test "C-GET resolves fetchers one object at a time and delivers their bytes" do
+      test_pid = self()
+      first = :crypto.strong_rand_bytes(128)
+      second = :crypto.strong_rand_bytes(256)
+
+      handler =
+        lazy_get_handler(test_pid, [
+          {@ct_image_storage, "1.2.3.4.1", :ok, first},
+          {@ct_image_storage, "1.2.3.4.2", :binary, second}
+        ])
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      {:ok, assoc} = connect_get(ref)
+
+      assert {:ok, [^first, ^second]} = Dimse.get(assoc, :study, <<>>, timeout: 10_000)
+      assert_received {:fetched, "1.2.3.4.1"}
+      refute_received {:fetched, "1.2.3.4.2"}
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+
+    test "a fetcher error is one failed C-GET sub-operation and the retrieve goes on" do
+      test_pid = self()
+      delivered = :crypto.strong_rand_bytes(64)
+
+      handler =
+        lazy_get_handler(test_pid, [
+          {@ct_image_storage, "1.2.3.4.1", :error, <<>>},
+          {@ct_image_storage, "1.2.3.4.2", :ok, delivered}
+        ])
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      {:ok, assoc} = connect_get(ref)
+
+      assert {:error, {:status, 0xB000}} = Dimse.get(assoc, :study, <<>>, timeout: 10_000)
+      assert_received {:fetched, "1.2.3.4.1"}
+      assert_received {:fetched, "1.2.3.4.2"}
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+
+    test "a fetcher that raises or returns garbage is reported and counted as failed" do
+      test_pid = self()
+      events = :telemetry_test.attach_event_handlers(self(), [[:dimse, :handler, :exception]])
+
+      handler =
+        lazy_get_handler(test_pid, [
+          {@ct_image_storage, "1.2.3.4.1", :raise, <<>>},
+          {@ct_image_storage, "1.2.3.4.2", :bad, <<>>},
+          {@ct_image_storage, "1.2.3.4.3", :ok, <<1, 2, 3, 4>>}
+        ])
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      {:ok, assoc} = connect_get(ref)
+
+      assert {:error, {:status, 0xB000}} = Dimse.get(assoc, :study, <<>>, timeout: 10_000)
+
+      assert_receive {[:dimse, :handler, :exception], ^events, _measurements,
+                      %{callback: :fetcher, kind: :error, reason: %RuntimeError{}}},
+                     2_000
+
+      assert_receive {[:dimse, :handler, :exception], ^events, _measurements,
+                      %{callback: :fetcher, reason: {:invalid_fetcher_result, :nonsense}}},
+                     2_000
+
+      assert_received {:fetched, "1.2.3.4.3"}
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+    end
+
+    test "C-MOVE resolves fetchers and reports the failed ones" do
+      test_pid = self()
+      dest_handler = store_dest_handler(test_pid)
+      {:ok, dest_ref} = Dimse.start_listener(port: 0, handler: dest_handler)
+      dest_port = :ranch.get_port(dest_ref)
+      moved = :crypto.strong_rand_bytes(128)
+
+      handler =
+        lazy_move_handler(
+          test_pid,
+          [
+            {@ct_image_storage, "1.2.3.4.1", :ok, moved},
+            {@ct_image_storage, "1.2.3.4.2", :error, <<>>}
+          ],
+          dest_port
+        )
+
+      {:ok, ref} = Dimse.start_listener(port: 0, handler: handler)
+      port = :ranch.get_port(ref)
+
+      {:ok, assoc} =
+        Dimse.connect("127.0.0.1", port,
+          calling_ae: "MOVE_SCU",
+          called_ae: "DIMSE",
+          abstract_syntaxes: [@study_root_move]
+        )
+
+      wait_for_established(assoc)
+
+      # A final status of 0xB000 (sub-operations complete, one or more failures)
+      # is reported as an error by the SCU, as it is for C-GET.
+      assert {:error, {:status, 0xB000}} =
+               Dimse.move(assoc, :study, <<>>, dest_ae: "DEST_SCP", timeout: 10_000)
+
+      assert_receive {:dest_stored, ^moved}, 5_000
+      assert_received {:fetched, "1.2.3.4.1"}
+      assert_received {:fetched, "1.2.3.4.2"}
+
+      assert :ok = Dimse.release(assoc, 5_000)
+      Dimse.stop_listener(ref)
+      Dimse.stop_listener(dest_ref)
+    end
+  end
+
+  defp connect_get(listener_ref) do
+    port = :ranch.get_port(listener_ref)
+
+    {:ok, assoc} =
+      Dimse.connect("127.0.0.1", port,
+        calling_ae: "GET_SCU",
+        called_ae: "DIMSE",
+        abstract_syntaxes: [@study_root_get, @ct_image_storage]
+      )
+
+    wait_for_established(assoc)
+    {:ok, assoc}
+  end
+
+  @doc false
+  # Sub-operation elements for the lazy handlers: `:binary` is sent as is;
+  # the other outcomes become fetchers that report to the test and then
+  # succeed, fail, raise or return garbage.
+  def lazy_instances(specs, test_pid) do
+    Enum.map(specs, fn
+      {sop_class, uid, :binary, data} ->
+        {sop_class, uid, data}
+
+      {sop_class, uid, outcome, data} ->
+        {sop_class, uid,
+         fn ->
+           send(test_pid, {:fetched, uid})
+
+           case outcome do
+             :ok -> {:ok, data}
+             :error -> {:error, :not_found}
+             :raise -> raise "storage down"
+             :bad -> :nonsense
+           end
+         end}
+    end)
+  end
+
+  defp lazy_get_handler(test_pid, specs) do
+    mod = :"Dimse.Test.LazyGetHandler.#{System.unique_integer([:positive])}"
+
+    Module.create(
+      mod,
+      quote do
+        @behaviour Dimse.Handler
+
+        @impl true
+        def supported_abstract_syntaxes do
+          ["1.2.840.10008.5.1.4.1.2.2.3", "1.2.840.10008.5.1.4.1.1.2"]
+        end
+
+        @impl true
+        def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+        @impl true
+        def handle_store(_command, _data, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_find(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_move(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_get(_command, query, _state) do
+          send(unquote(test_pid), {:get_query, query})
+
+          {:ok,
+           Dimse.IntegrationTest.lazy_instances(unquote(Macro.escape(specs)), unquote(test_pid))}
+        end
+      end,
+      Macro.Env.location(__ENV__)
+    )
+
+    mod
+  end
+
+  defp lazy_move_handler(test_pid, specs, dest_port) do
+    mod = :"Dimse.Test.LazyMoveHandler.#{System.unique_integer([:positive])}"
+
+    Module.create(
+      mod,
+      quote do
+        @behaviour Dimse.Handler
+
+        @impl true
+        def supported_abstract_syntaxes do
+          ["1.2.840.10008.5.1.4.1.2.2.2"]
+        end
+
+        @impl true
+        def handle_echo(_command, _state), do: {:ok, 0x0000}
+
+        @impl true
+        def handle_store(_command, _data, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_find(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        @impl true
+        def handle_move(_command, query, _state) do
+          send(unquote(test_pid), {:move_query, query})
+
+          {:ok,
+           Dimse.IntegrationTest.lazy_instances(unquote(Macro.escape(specs)), unquote(test_pid))}
+        end
+
+        @impl true
+        def handle_get(_command, _query, _state), do: {:error, 0xC000, "not supported"}
+
+        def resolve_ae("DEST_SCP"), do: {:ok, {"127.0.0.1", unquote(dest_port)}}
+        def resolve_ae(_), do: {:error, :unknown_ae}
+      end,
+      Macro.Env.location(__ENV__)
+    )
+
+    mod
+  end
+
   defp get_handler(test_pid, instances) do
     mod = :"Dimse.Test.GetHandler.#{System.unique_integer([:positive])}"
 

@@ -10,14 +10,25 @@ defmodule Dimse.Association.State do
 
   @type phase :: :idle | :negotiating | :established | :releasing | :closed
 
+  @typedoc """
+  Progress of the C-STORE sub-operations of one C-GET or C-MOVE request.
+
+  `remaining` holds the elements not yet sent (`t:Dimse.Handler.instance/0`,
+  binaries or fetchers). `in_flight_uid` is set only while a C-GET C-STORE-RQ
+  awaits its C-STORE-RSP. `failed_uids` collects the SOP Instance UIDs of failed
+  sub-operations, newest first, for the Failed SOP Instance UID List of the
+  final response.
+  """
   @type sub_operation :: %{
           type: :c_get | :c_move,
           message_id: integer(),
           context_id: pos_integer(),
           sop_class_uid: String.t(),
-          remaining: [{String.t(), String.t(), binary()}],
+          remaining: [Dimse.Handler.instance()],
+          in_flight_uid: String.t() | nil,
           completed: non_neg_integer(),
           failed: non_neg_integer(),
+          failed_uids: [String.t()],
           warning: non_neg_integer(),
           sub_assoc: pid() | nil
         }

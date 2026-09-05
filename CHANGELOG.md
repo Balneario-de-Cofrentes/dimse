@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Lazy C-MOVE and C-GET sub-operations. `handle_move/3` and `handle_get/3` may return `{sop_class_uid, sop_instance_uid, fetcher}` where `fetcher` is a zero-arity function returning `{:ok, data_set}` or `{:error, reason}`; the association calls it right before that object's C-STORE and keeps no reference to the bytes afterwards, so a retrieve of thousands of objects holds one data set at a time. A fetcher that returns an error, raises, throws, exits or returns an unexpected term counts as one failed sub-operation (the last four also emit `[:dimse, :handler, :exception]` with `callback: :fetcher`) and the retrieve continues.
+- The final C-MOVE-RSP / C-GET-RSP carries the Failed SOP Instance UID List (0008,0058) in sub-operation order when any sub-operation failed (PS3.4 C.4.2.1.4.2 and C.4.3.1.3.2), encoded in the negotiated transfer syntax; under Explicit VR Little Endian the list is cut to the UIDs that fit the 16-bit length while the counts stay exact.
+- Implementation version bumped to `DIMSE_0.8.5`.
+
+### Fixed
+
+- Optional handler callbacks (`validate_association/2`, `handle_authenticate/2`, `supported_abstract_syntaxes/0`, `resolve_ae/1` and the DIMSE-N SCP callbacks) were checked with `function_exported?/3` without loading the handler module first. In interactive mode (dev/test) a handler that had not been loaded yet silently lost those callbacks, so the first association could skip validation or authentication and be rejected with `:no_accepted_contexts`. The module is now loaded before the check.
+
 ## [0.8.4] - 2026-03-20
 
 ### Changed
