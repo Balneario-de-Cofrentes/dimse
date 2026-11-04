@@ -234,7 +234,7 @@ defmodule Dimse.Association do
     state.transport.setopts(socket, active: :once, packet: :raw, mode: :binary)
 
     new_state =
-      %{state | socket: socket}
+      %{state | socket: socket, peer_cert: peer_cert(state.transport, socket)}
       |> start_artim_timer()
 
     Telemetry.emit(:association_start, %{system_time: System.system_time()}, %{
@@ -280,6 +280,7 @@ defmodule Dimse.Association do
           state
           | socket: socket,
             transport: transport,
+            peer_cert: peer_cert(transport, socket),
             local_ae_title: calling_ae,
             remote_ae_title: called_ae,
             proposed_contexts: proposed_contexts,
@@ -1811,6 +1812,18 @@ defmodule Dimse.Association do
       remaining: length(sub_op.remaining)
     })
   end
+
+  # The certificate the remote peer presented during the TLS handshake (DER),
+  # so handlers can tell mutual-TLS peers apart. SCP sockets come from
+  # `:ranch_ssl`, SCU sockets from `:ssl`; both are plain `:ssl` sockets.
+  defp peer_cert(transport, socket) when transport in [:ranch_ssl, :ssl] do
+    case :ssl.peercert(socket) do
+      {:ok, der} -> der
+      {:error, _} -> nil
+    end
+  end
+
+  defp peer_cert(_transport, _socket), do: nil
 
   # Emit TLS handshake event with connection information.
   defp emit_tls_handshake(socket, association_id) do

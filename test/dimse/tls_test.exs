@@ -37,6 +37,41 @@ defmodule Dimse.TlsTest do
     ]
   end
 
+  defp mtls_server_opts(certs) do
+    server_tls_opts(certs) ++
+      [cacertfile: certs.cacertfile, verify: :verify_peer, fail_if_no_peer_cert: true]
+  end
+
+  defp mtls_client_opts(certs) do
+    client_tls_opts(certs) ++ [certfile: certs.client_certfile, keyfile: certs.client_keyfile]
+  end
+
+  defp der(certfile) do
+    [{:Certificate, der, :not_encrypted}] = :public_key.pem_decode(File.read!(certfile))
+    der
+  end
+
+  defp start_probe_listener(opts) do
+    {:ok, ref} = Dimse.start_listener([port: 0, handler: PeerCertProbeHandler] ++ opts)
+    on_exit(fn -> Dimse.stop_listener(ref) end)
+    :ranch.get_port(ref)
+  end
+
+  # Echoes over a fresh association and returns the SCU's own `peer_cert`.
+  defp echo_and_release(port, connect_opts) do
+    opts =
+      Keyword.merge(
+        [calling_ae: "PEER_SCU", called_ae: "PEER_SCP", abstract_syntaxes: ["1.2.840.10008.1.1"]],
+        connect_opts
+      )
+
+    {:ok, assoc} = Dimse.connect("127.0.0.1", port, opts)
+    assert :ok = Dimse.echo(assoc, timeout: 5_000)
+    scu_peer_cert = :sys.get_state(assoc).peer_cert
+    assert :ok = Dimse.release(assoc, 5_000)
+    scu_peer_cert
+  end
+
   describe "C-ECHO over TLS" do
     test "SCU can echo SCP over TLS", %{certs: certs} do
       {:ok, ref} =
@@ -97,36 +132,21 @@ defmodule Dimse.TlsTest do
 
   describe "mutual TLS" do
     test "SCP verifies client certificate", %{certs: certs} do
-      server_tls =
-        server_tls_opts(certs) ++
-          [
-            cacertfile: certs.cacertfile,
-            verify: :verify_peer,
-            fail_if_no_peer_cert: true
-          ]
-
       {:ok, ref} =
         Dimse.start_listener(
           port: 0,
           handler: Dimse.Scp.Echo,
-          tls: server_tls
+          tls: mtls_server_opts(certs)
         )
 
       port = :ranch.get_port(ref)
-
-      client_tls =
-        client_tls_opts(certs) ++
-          [
-            certfile: certs.client_certfile,
-            keyfile: certs.client_keyfile
-          ]
 
       {:ok, assoc} =
         Dimse.connect("127.0.0.1", port,
           calling_ae: "MTLS_SCU",
           called_ae: "MTLS_SCP",
           abstract_syntaxes: ["1.2.840.10008.1.1"],
-          tls: client_tls
+          tls: mtls_client_opts(certs)
         )
 
       wait_for_established(assoc)
@@ -135,6 +155,43 @@ defmodule Dimse.TlsTest do
       assert :ok = Dimse.release(assoc, 5_000)
 
       Dimse.stop_listener(ref)
+    end
+  end
+
+  describe "peer certificate in association state" do
+    setup do
+      Process.register(self(), PeerCertProbe)
+      :ok
+    end
+
+    test "SCP handlers receive the client certificate on mutual TLS", %{certs: certs} do
+      port = start_probe_listener(tls: mtls_server_opts(certs))
+      echo_and_release(port, tls: mtls_client_opts(certs))
+
+      client_der = der(certs.client_certfile)
+      assert_receive {:validate_association, ^client_der}
+      assert_receive {:handle_echo, ^client_der}
+    end
+
+    test "SCU state holds the server certificate", %{certs: certs} do
+      port = start_probe_listener(tls: mtls_server_opts(certs))
+      assert echo_and_release(port, tls: mtls_client_opts(certs)) == der(certs.server_certfile)
+    end
+
+    test "is nil on TLS when the client presents no certificate", %{certs: certs} do
+      port = start_probe_listener(tls: server_tls_opts(certs))
+      echo_and_release(port, tls: client_tls_opts(certs))
+
+      assert_receive {:validate_association, nil}
+      assert_receive {:handle_echo, nil}
+    end
+
+    test "is nil on plain TCP" do
+      port = start_probe_listener([])
+      assert echo_and_release(port, []) == nil
+
+      assert_receive {:validate_association, nil}
+      assert_receive {:handle_echo, nil}
     end
   end
 
@@ -378,20 +435,11 @@ defmodule Dimse.TlsTest do
     end
 
     test "SCP rejects client without required cert", %{certs: certs} do
-      # SCP requires mutual TLS
-      server_tls =
-        server_tls_opts(certs) ++
-          [
-            cacertfile: certs.cacertfile,
-            verify: :verify_peer,
-            fail_if_no_peer_cert: true
-          ]
-
       {:ok, ref} =
         Dimse.start_listener(
           port: 0,
           handler: Dimse.Scp.Echo,
-          tls: server_tls
+          tls: mtls_server_opts(certs)
         )
 
       port = :ranch.get_port(ref)
@@ -463,4 +511,33 @@ defmodule TestNGetHandler do
 
   @impl true
   def handle_n_get(_command, _state), do: {:ok, 0x0000, <<0x00, 0x01, 0x02>>}
+end
+
+# Reports `state.peer_cert` to the test process registered as `PeerCertProbe`.
+defmodule PeerCertProbeHandler do
+  @behaviour Dimse.Handler
+
+  @impl true
+  def validate_association(_request, state) do
+    send(PeerCertProbe, {:validate_association, state.peer_cert})
+    {:ok, nil}
+  end
+
+  @impl true
+  def handle_echo(_command, state) do
+    send(PeerCertProbe, {:handle_echo, state.peer_cert})
+    {:ok, 0x0000}
+  end
+
+  @impl true
+  def handle_store(_command, _data, _state), do: {:ok, 0x0000}
+
+  @impl true
+  def handle_find(_command, _query, _state), do: {:ok, []}
+
+  @impl true
+  def handle_move(_command, _query, _state), do: {:ok, []}
+
+  @impl true
+  def handle_get(_command, _query, _state), do: {:ok, []}
 end

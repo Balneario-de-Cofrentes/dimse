@@ -5,6 +5,13 @@ defmodule Dimse.Association.State do
   Tracks everything needed during the lifetime of a DICOM association:
   socket, negotiated contexts, message assembly buffers, and counters.
 
+  Handlers receive this struct as `state`. `peer_cert` holds the certificate
+  the remote peer presented during the TLS handshake, as a DER binary
+  (`:ssl.peercert/1`): the SCU's client certificate on a mutual-TLS listener,
+  the SCP's server certificate on the SCU side. It is `nil` on plain TCP and
+  when the peer presented no certificate. Decode it with
+  `:public_key.pkix_decode_cert/2` to identify the peer, e.g. by subject CN.
+
   See PS3.8 Section 9.2 for the Upper Layer state machine specification.
   """
 
@@ -35,8 +42,9 @@ defmodule Dimse.Association.State do
 
   @type t :: %__MODULE__{
           phase: phase(),
-          socket: :inet.socket() | nil,
+          socket: :inet.socket() | :ssl.sslsocket() | nil,
           transport: module() | nil,
+          peer_cert: binary() | nil,
           remote_ae_title: String.t() | nil,
           local_ae_title: String.t() | nil,
           max_pdu_length: pos_integer(),
@@ -68,6 +76,7 @@ defmodule Dimse.Association.State do
   defstruct phase: :idle,
             socket: nil,
             transport: nil,
+            peer_cert: nil,
             remote_ae_title: nil,
             local_ae_title: nil,
             max_pdu_length: 16_384,
