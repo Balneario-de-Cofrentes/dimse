@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `Dimse.connect/3` and `Dimse.Scu.open/3` could return `{:error, :timeout}` when a TLS server rejected the client, for example a mutual-TLS SCP sending `certificate_required` to a client without a certificate. With TLS 1.3 the client finishes its handshake before the alert arrives, and OTP's `:ssl` can block the association for up to 5 s while that connection tears down, so the open deadline expired with the alert still queued. When the deadline expires, the SCU now reports a failure the association had already received, e.g. `{:error, {:tcp_error, {:tls_alert, {:certificate_required, _}}}}`, and keeps `{:error, :timeout}` for a peer that never answered.
+
 ## [0.8.9] - 2026-11-05
 
 ### Fixed
