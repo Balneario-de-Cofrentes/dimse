@@ -497,7 +497,7 @@ defmodule Dimse.Pdu.Decoder do
        when byte_size(rest) >= pdv_length do
     # pdv_length includes context_id (1) + flags (1) + data
     data_length = pdv_length - 2
-    <<context_id, flags, data::binary-size(data_length), remaining::binary>> = rest
+    <<context_id, flags, data::binary-size(^data_length), remaining::binary>> = rest
 
     pdv = %Pdu.PresentationDataValue{
       context_id: context_id,
