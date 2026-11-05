@@ -45,6 +45,31 @@ defmodule Dimse.AssociationTest do
     end
   end
 
+  # Stands in for an SCU association that is still negotiating: it answers
+  # the context poll with no contexts and stops the way `Dimse.Association`
+  # does on an abort and on a socket error. With `:fail_with`, the poll also
+  # queues an `:ssl_error`, so the failure is waiting in the mailbox by the
+  # time the SCU gives up and aborts.
+  defmodule NegotiatingAssociation do
+    use GenServer
+
+    @impl true
+    def init(opts), do: {:ok, Keyword.get(opts, :fail_with)}
+
+    @impl true
+    def handle_call(:get_negotiated_contexts, _from, failure) do
+      if failure, do: send(self(), {:ssl_error, :socket, failure})
+      {:reply, %{}, failure}
+    end
+
+    @impl true
+    def handle_cast(:abort, failure), do: {:stop, :aborted, failure}
+
+    @impl true
+    def handle_info({:ssl_error, _socket, reason}, failure),
+      do: {:stop, {:tcp_error, reason}, failure}
+  end
+
   defmodule NoSyntaxHandler do
   end
 
@@ -698,6 +723,52 @@ defmodule Dimse.AssociationTest do
       assert {:error, :tcp_closed} = Dimse.Scu.finalize_open(pid, ref, started_at, 1_000)
     end
 
+    # A TLS 1.3 client finishes its handshake before the server's
+    # certificate_required alert arrives, and OTP's :ssl can block the
+    # association in a call for up to 5 s while the connection tears down.
+    # When the deadline then expires, the queued alert explains the failure
+    # and must win over :timeout.
+    @tag :capture_log
+    test "finalize_open/4 reports a connection failure queued before the deadline" do
+      alert = {:tls_alert, {:certificate_required, ~c"received SERVER ALERT"}}
+      pid = fake_association()
+      ref = Process.monitor(pid)
+      send(pid, {:ssl_error, :socket, alert})
+      started_at = System.monotonic_time(:millisecond) - 10
+
+      assert {:error, {:tcp_error, ^alert}} = Dimse.Scu.finalize_open(pid, ref, started_at, 0)
+    end
+
+    @tag :capture_log
+    test "the establishment deadline reports a connection failure queued before it" do
+      alert = {:tls_alert, {:certificate_required, ~c"received SERVER ALERT"}}
+      pid = fake_association(fail_with: alert)
+      ref = Process.monitor(pid)
+      deadline = System.monotonic_time(:millisecond)
+
+      assert {:error, {:tcp_error, ^alert}} =
+               Dimse.Scu.test_do_await_established(pid, ref, deadline)
+    end
+
+    test "the establishment deadline reports :timeout when the abort ends the association" do
+      pid = fake_association()
+      ref = Process.monitor(pid)
+      deadline = System.monotonic_time(:millisecond) + 20
+
+      assert {:error, :timeout} = Dimse.Scu.test_do_await_established(pid, ref, deadline)
+      refute Process.alive?(pid)
+    end
+
+    test "finalize_open/4 reports :timeout when the association does not stop on abort" do
+      pid = spawn(fn -> Process.sleep(:infinity) end)
+      ref = Process.monitor(pid)
+      started_at = System.monotonic_time(:millisecond) - 10
+
+      assert {:error, :timeout} = Dimse.Scu.finalize_open(pid, ref, started_at, 0)
+      refute_received {:DOWN, ^ref, :process, ^pid, _}
+      Process.exit(pid, :kill)
+    end
+
     test "normalize_connect_call_exit/1 and normalize_connect_exit/1 cover supported exit forms" do
       assert :closed = Dimse.Scu.normalize_connect_call_exit({:noproc, {GenServer, :call, []}})
       assert :closed = Dimse.Scu.normalize_connect_call_exit({:normal, {GenServer, :call, []}})
@@ -1049,6 +1120,12 @@ defmodule Dimse.AssociationTest do
         user_info
 
     <<0x01, 0x00, byte_size(payload)::32>> <> payload
+  end
+
+  # Not linked: the fake stops with abnormal reasons, as the real one does.
+  defp fake_association(opts \\ []) do
+    {:ok, pid} = GenServer.start(NegotiatingAssociation, opts)
+    pid
   end
 
   defp wait_for_established(assoc, timeout \\ 2_000) do

@@ -37,6 +37,10 @@ defmodule Dimse.Scu do
 
   @verification_uid "1.2.840.10008.1.1"
 
+  # How long an expired open waits for the aborted association to report why
+  # it stopped. A failure already queued (e.g. a TLS alert) arrives at once.
+  @abort_grace_ms 100
+
   @doc """
   Opens a DICOM association to a remote AE.
 
@@ -148,9 +152,7 @@ defmodule Dimse.Scu do
         with :ok <- do_await_established(pid, ref, started_at + timeout), do: {:ok, pid}
 
       _ ->
-        Dimse.Association.abort(pid)
-        Process.demonitor(ref, [:flush])
-        {:error, :timeout}
+        expire_open(pid, ref)
     end
   end
 
@@ -197,9 +199,7 @@ defmodule Dimse.Scu do
 
           _ ->
             if System.monotonic_time(:millisecond) >= deadline do
-              Dimse.Association.abort(pid)
-              Process.demonitor(ref, [:flush])
-              {:error, :timeout}
+              expire_open(pid, ref)
             else
               do_await_established(pid, ref, deadline)
             end
@@ -207,6 +207,26 @@ defmodule Dimse.Scu do
     end
   catch
     :exit, reason -> await_established_exit(pid, ref, reason)
+  end
+
+  # The deadline expired: abort, but report a failure the association had
+  # already queued (e.g. a TLS 1.3 alert delayed while OTP's :ssl tears the
+  # connection down). The abort is a cast, so a queued failure is handled
+  # first; only an exit the abort itself causes means the peer never answered.
+  defp expire_open(pid, ref) do
+    Dimse.Association.abort(pid)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, reason} ->
+        case normalize_connect_exit(reason) do
+          ended when ended in [:aborted, :closed] -> {:error, :timeout}
+          failure -> {:error, failure}
+        end
+    after
+      @abort_grace_ms ->
+        Process.demonitor(ref, [:flush])
+        {:error, :timeout}
+    end
   end
 
   @doc false
