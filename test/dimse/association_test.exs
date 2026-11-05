@@ -669,7 +669,7 @@ defmodule Dimse.AssociationTest do
   end
 
   describe "Scu helper normalization" do
-    test "finalize_open/3 aborts immediately when no time remains" do
+    test "finalize_open/4 aborts immediately when no time remains" do
       pid =
         spawn(fn ->
           receive do
@@ -677,9 +677,25 @@ defmodule Dimse.AssociationTest do
           end
         end)
 
+      ref = Process.monitor(pid)
       started_at = System.monotonic_time(:millisecond) - 10
 
-      assert {:error, :timeout} = Dimse.Scu.finalize_open(pid, started_at, 0)
+      assert {:error, :timeout} = Dimse.Scu.finalize_open(pid, ref, started_at, 0)
+    end
+
+    # The association can die before open/3 starts waiting on it (the peer
+    # closes the socket right after the TCP connect). The monitor is taken at
+    # start, so its exit reason must survive instead of turning into :noproc.
+    test "finalize_open/4 reports the exit reason of an association that already died" do
+      {pid, ref} = spawn_monitor(fn -> exit({:shutdown, :tcp_closed}) end)
+
+      # A second monitor only tells us the process is gone; the first one's
+      # DOWN message stays queued for finalize_open/4.
+      probe = Process.monitor(pid)
+      assert_receive {:DOWN, ^probe, :process, ^pid, _}, 1_000
+
+      started_at = System.monotonic_time(:millisecond)
+      assert {:error, :tcp_closed} = Dimse.Scu.finalize_open(pid, ref, started_at, 1_000)
     end
 
     test "normalize_connect_call_exit/1 and normalize_connect_exit/1 cover supported exit forms" do
@@ -696,8 +712,7 @@ defmodule Dimse.AssociationTest do
     end
 
     test "await_established_exit/3 prefers DOWN reasons and otherwise falls back" do
-      down_pid = spawn(fn -> :ok end)
-      down_ref = Process.monitor(down_pid)
+      {down_pid, down_ref} = spawn_monitor(fn -> :ok end)
 
       assert {:error, :closed} =
                Dimse.Scu.await_established_exit(

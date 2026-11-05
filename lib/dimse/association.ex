@@ -22,7 +22,7 @@ defmodule Dimse.Association do
   alias Dimse.Command.Fields
 
   @implementation_uid "1.2.826.0.1.3680043.8.498.1"
-  @implementation_version "DIMSE_0.8.8"
+  @implementation_version "DIMSE_0.8.9"
 
   @implicit_vr_le "1.2.840.10008.1.2"
   @explicit_vr_le "1.2.840.10008.1.2.1"
@@ -46,6 +46,14 @@ defmodule Dimse.Association do
   @doc false
   def start(opts) do
     GenServer.start(__MODULE__, opts)
+  end
+
+  # Starts and monitors in one step, so an association that dies right after
+  # init (e.g. the peer closes the socket) still reports its exit reason.
+  @doc false
+  @spec start_monitor(keyword()) :: {:ok, {pid(), reference()}} | {:error, term()}
+  def start_monitor(opts) do
+    :gen_server.start_monitor(__MODULE__, opts, [])
   end
 
   @doc """

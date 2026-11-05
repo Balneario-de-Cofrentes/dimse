@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.9] - 2026-11-05
+
+### Fixed
+
+- `Dimse.connect/3` and `Dimse.Scu.open/3` returned `{:error, :noproc}` instead of `{:error, :tcp_closed}` when the SCP closed the connection right after the TCP connect. The association process could die before `open/3` monitored it, so its exit reason was lost. The SCU now starts and monitors the association in one step (`:gen_server.start_monitor/3`).
+
+### Changed
+
+- Implementation version bumped to `DIMSE_0.8.9`.
+
 ## [0.8.8] - 2026-11-04
 
 ### Added
@@ -302,7 +312,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Telemetry event definitions for association lifecycle and PDU I/O
 - CI workflow with Elixir 1.16/1.17/1.18 matrix
 
-[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.8...HEAD
+[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.9...HEAD
+[0.8.9]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.8...v0.8.9
 [0.8.8]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.7...v0.8.8
 [0.8.7]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.6...v0.8.7
 [0.8.6]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.5...v0.8.6

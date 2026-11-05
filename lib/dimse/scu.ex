@@ -90,10 +90,10 @@ defmodule Dimse.Scu do
       |> maybe_add(:role_selections, Keyword.get(opts, :role_selections))
       |> maybe_add(:user_identity, Keyword.get(opts, :user_identity))
 
-    # Use start (not start_link) so connection failures don't crash the caller
-    case Dimse.Association.start(assoc_opts) do
-      {:ok, pid} ->
-        finalize_open(pid, started_at, timeout)
+    # Not linked, so connection failures don't crash the caller
+    case Dimse.Association.start_monitor(assoc_opts) do
+      {:ok, {pid, ref}} ->
+        finalize_open(pid, ref, started_at, timeout)
 
       {:error, _} = err ->
         err
@@ -140,17 +140,16 @@ defmodule Dimse.Scu do
   end
 
   @doc false
-  @spec finalize_open(pid(), integer(), timeout()) :: {:ok, pid()} | {:error, term()}
-  def finalize_open(pid, started_at, timeout) do
+  @spec finalize_open(pid(), reference(), integer(), timeout()) ::
+          {:ok, pid()} | {:error, term()}
+  def finalize_open(pid, ref, started_at, timeout) do
     case remaining_timeout(started_at, timeout) do
       remaining when remaining > 0 ->
-        case await_established(pid, remaining) do
-          :ok -> {:ok, pid}
-          {:error, _} = err -> err
-        end
+        with :ok <- do_await_established(pid, ref, started_at + timeout), do: {:ok, pid}
 
       _ ->
         Dimse.Association.abort(pid)
+        Process.demonitor(ref, [:flush])
         {:error, :timeout}
     end
   end
@@ -179,12 +178,6 @@ defmodule Dimse.Scu do
   def normalize_connect_exit({:shutdown, reason}), do: normalize_connect_exit(reason)
   def normalize_connect_exit(:normal), do: :closed
   def normalize_connect_exit(reason), do: reason
-
-  defp await_established(pid, timeout) do
-    ref = Process.monitor(pid)
-    deadline = System.monotonic_time(:millisecond) + timeout
-    do_await_established(pid, ref, deadline)
-  end
 
   defp remaining_timeout(started_at, timeout) do
     elapsed = System.monotonic_time(:millisecond) - started_at
