@@ -170,7 +170,7 @@ defmodule Dimse.Message do
   end
 
   defp do_fragment_pdvs(binary, context_id, is_command, max, acc) do
-    <<chunk::binary-size(max), rest::binary>> = binary
+    <<chunk::binary-size(^max), rest::binary>> = binary
 
     pdu = %Pdu.PDataTf{
       pdv_items: [
