@@ -22,7 +22,7 @@ defmodule Dimse.Association do
   alias Dimse.Command.Fields
 
   @implementation_uid "1.2.826.0.1.3680043.8.498.1"
-  @implementation_version "DIMSE_0.8.7"
+  @implementation_version "DIMSE_0.8.8"
 
   @implicit_vr_le "1.2.840.10008.1.2"
   @explicit_vr_le "1.2.840.10008.1.2.1"

@@ -7,9 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.8] - 2026-11-04
+
 ### Added
 
 - `Dimse.Association.State` gains `peer_cert`: the certificate the remote peer presented during the TLS handshake, as a DER binary (`:ssl.peercert/1`), or `nil` on plain TCP and when no certificate was presented. Set right after the handshake, so `validate_association/2`, `handle_authenticate/2` and every service callback can identify a mutual-TLS peer (e.g. by subject CN) without reading the raw socket. On the SCU side it holds the SCP's server certificate.
+
+### Changed
+
+- Implementation version bumped to `DIMSE_0.8.8`.
 
 ### Fixed
 
@@ -296,7 +302,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Telemetry event definitions for association lifecycle and PDU I/O
 - CI workflow with Elixir 1.16/1.17/1.18 matrix
 
-[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.7...HEAD
+[Unreleased]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.8...HEAD
+[0.8.8]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.7...v0.8.8
 [0.8.7]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.6...v0.8.7
 [0.8.6]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.5...v0.8.6
 [0.8.5]: https://github.com/Balneario-de-Cofrentes/dimse/compare/v0.8.4...v0.8.5
