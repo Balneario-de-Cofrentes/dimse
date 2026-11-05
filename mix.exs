@@ -17,12 +17,12 @@ defmodule Dimse.MixProject do
         "Pure Elixir DICOM DIMSE networking library — Upper Layer Protocol, SCP/SCU services",
       package: package(),
       docs: docs(),
-      source_url: @source_url,
-      preferred_cli_env: [
-        test: :test,
-        "test.all": :test
-      ]
+      source_url: @source_url
     ]
+  end
+
+  def cli do
+    [preferred_envs: [test: :test, "test.all": :test]]
   end
 
   def application do
